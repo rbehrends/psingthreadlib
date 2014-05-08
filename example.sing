@@ -1,0 +1,19 @@
+LIB "zmq.lib";
+
+link zout = zmq_push_socket("inproc://#0");
+link zin = zmq_pull_socket("+inproc://#0");
+proc foo() {
+  int i, j;
+  list x;
+  string y;
+  for (j=0; j<100; j++) {
+    for (i=0; i<100; i++) {
+      write(zout, list("a", "b"), "foo");
+    }
+    for (i=0; i<100; i++) {
+      x = (read(zin));
+      y = (read(zin));
+    }
+  }
+}
+foo();

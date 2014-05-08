@@ -1,0 +1,61 @@
+version="version zmq.lib 0.1.0.0 May_2014";
+category="General purpose";
+info="
+LIBRARY: zmq.lib An interface to the ZeroMQ library
+AUTHOR: Reimer Behrends
+
+OVERVIEW:
+To be written
+
+KEYWORDS: distributed computing
+";
+
+proc zmq_socket(string s) {
+  link z = "zmq:r " + s;
+  open(z);
+  return(z);
+}
+proc zmq_push_socket(string uri) {
+  link z = "zmq:r push:" + uri;
+  open(z);
+  return(z);
+}
+proc zmq_pull_socket(string uri) {
+  link z = "zmq:r pull:" + uri;
+  open(z);
+  return(z);
+}
+proc zmq_req_socket(string uri) {
+  link z = "zmq:r req:" + uri;
+  open(z);
+  return(z);
+}
+proc zmq_rep_socket(string uri) {
+  link z = "zmq:r rep:" + uri;
+  open(z);
+  return(z);
+}
+proc zmq_pub_socket(string uri) {
+  link z = "zmq:r pub:" + uri;
+  open(z);
+  return(z);
+}
+proc zmq_sub_socket(string uri) {
+  link z = "zmq:r sub:" + uri;
+  open(z);
+  return(z);
+}
+proc zmq_dealer_socket(string uri) {
+  link z = "zmq:r dealer:" + uri;
+  open(z);
+  return(z);
+}
+proc zmq_router_socket(string uri) {
+  link z = "zmq:r router:" + uri;
+  open(z);
+  return(z);
+}
+
+static proc mod_init() {
+  LIB "zmq_core.so";
+}
