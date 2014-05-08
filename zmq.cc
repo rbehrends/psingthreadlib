@@ -156,11 +156,14 @@ BOOLEAN zmqLinkOpen(si_link l, short flag, leftv u) {
     case ZMQ_PULL:
     case ZMQ_SUB:
       SI_LINK_SET_R_OPEN_P(l);
+      break;
     case ZMQ_PUSH:
     case ZMQ_PUB:
       SI_LINK_SET_W_OPEN_P(l);
+      break;
     default:
       SI_LINK_SET_RW_OPEN_P(l);
+      break;
   }
   return FALSE;
 }
@@ -259,6 +262,7 @@ static BOOLEAN zmqSendStr(void *socket, char *str, int flags) {
     return TRUE;
   }
   zmq_msg_close(&msg);
+  return FALSE;
 }
 
 BOOLEAN zmqLinkWrite(si_link l, leftv arg) {
