@@ -5,6 +5,7 @@
 #include <zmq.h>
 #include <cstring>
 #include <errno.h>
+#include <vector>
 
 extern si_link_extension si_link_root;
 
@@ -107,21 +108,21 @@ BOOLEAN zmqLinkOpen(si_link l, short flag, leftv u) {
   ZmqSocket *zsocket;
   int type;
   const char *mode;
-  if (tail = prefix(arg, "push"))
+  if ((tail = prefix(arg, "push")))
     type = ZMQ_PUSH;
-  else if (tail = prefix(arg, "pull"))
+  else if ((tail = prefix(arg, "pull")))
     type = ZMQ_PULL;
-  else if (tail = prefix(arg, "dealer"))
+  else if ((tail = prefix(arg, "dealer")))
     type = ZMQ_DEALER;
-  else if (tail = prefix(arg, "router"))
+  else if ((tail = prefix(arg, "router")))
     type = ZMQ_ROUTER;
-  else if (tail = prefix(arg, "req"))
+  else if ((tail = prefix(arg, "req")))
     type = ZMQ_REQ;
-  else if (tail = prefix(arg, "rep"))
+  else if ((tail = prefix(arg, "rep")))
     type = ZMQ_REP;
-  else if (tail = prefix(arg, "pub"))
+  else if ((tail = prefix(arg, "pub")))
     type = ZMQ_PUB;
-  else if (tail = prefix(arg, "sub"))
+  else if ((tail = prefix(arg, "sub")))
     type = ZMQ_SUB;
   else {
     Werror("ZeroMQ: Invalid socket type: '%s'", arg);
@@ -206,15 +207,11 @@ static bool zmqHasMore(void *socket) {
   return more != 0;
 }
 
-struct LinkedList {
-  LinkedList *next;
-  leftv value;
-};
 
 leftv zmqLinkRead(si_link l) {
   ZmqSocket *zsocket = (ZmqSocket *)l->data;
-  LinkedList *head, *tail;
-  int n;
+  std::vector<leftv> values;
+  int n = 1;
   void *socket = zsocket->socket;
   leftv v = zmqRecvStr(socket);
   if (!v)
@@ -222,34 +219,23 @@ leftv zmqLinkRead(si_link l) {
   if (!zmqHasMore(socket)) {
     return v;
   }
-  head = (LinkedList *)omAlloc(sizeof(LinkedList));
-  head->next = NULL;
-  head->value = v;
-  tail = head;
-  n = 1;
+  values.push_back(v);
   do {
     v = zmqRecvStr(socket);
     if (!v) break;
     n++;
-    tail->next = (LinkedList *) omAlloc(sizeof(LinkedList));
-    tail = tail->next;
-    tail->next = NULL;
-    tail->value = v;
+    values.push_back(v);
   } while (zmqHasMore(socket));
   lists L = (lists)omAllocBin(slists_bin);
   L->Init(n);
-  tail = head;
   for (int i=0; i<n; i++) {
-    L->m[i].data = (tail->value->Data());
-    L->m[i].rtyp = (tail->value->Typ());
-    omFreeBin(tail->value, sleftv_bin);
-    tail = tail->next;
-    omFree(head);
-    head = tail;
+    L->m[i].data = values[i]->Data();
+    L->m[i].rtyp = values[i]->Typ();
   }
   leftv result = (leftv) omAlloc0Bin(sleftv_bin);
   result->rtyp = LIST_CMD;
   result->data = (void *)L;
+  return result;
 }
 
 static BOOLEAN zmqSendStr(void *socket, char *str, int flags) {
