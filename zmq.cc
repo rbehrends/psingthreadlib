@@ -9,10 +9,12 @@
 
 extern si_link_extension si_link_root;
 
+namespace { // putting the implementation inside an anonymous namespace
+
 enum ZmqSocketStatus { zsDisconnected, zsBound, zsConnected };
 
-static int zmqSocketID;
-static void *zmqContext;
+int zmqSocketID;
+void *zmqContext;
 
 struct ZmqSocket {
   void *socket;
@@ -23,17 +25,17 @@ void zmqInitRuntime() {
   zmqContext = zmq_init(2);
 }
 
-#define MAX_POLL 1024
+const int MaxPollItems = 1024;
 
 BOOLEAN zmqPoll(leftv result, leftv arg) {
-  zmq_pollitem_t ev[MAX_POLL];
-  si_link links[MAX_POLL];
-  short modes[MAX_POLL];
+  zmq_pollitem_t ev[MaxPollItems];
+  si_link links[MaxPollItems];
+  short modes[MaxPollItems];
   short mode = ZMQ_POLLIN;
   int n = 0;
   while (arg != NULL) {
     si_link l;
-    if (n == MAX_POLL) {
+    if (n == MaxPollItems) {
       WerrorS("ZeroMQ: Too many links to poll");
       return TRUE;
     }
@@ -89,7 +91,7 @@ BOOLEAN zmqPoll(leftv result, leftv arg) {
   return TRUE;
 }
 
-static char *prefix(char *arg, const char *str) {
+char *prefix(char *arg, const char *str) {
   while (*str) {
     if (*arg != *str)
       return NULL;
@@ -178,7 +180,7 @@ BOOLEAN zmqLinkClose(si_link l) {
   return FALSE;
 }
 
-static leftv zmqRecvStr(void *socket) {
+leftv zmqRecvStr(void *socket) {
   zmq_msg_t msg;
   zmq_msg_init(&msg);
   restart:
@@ -200,7 +202,7 @@ static leftv zmqRecvStr(void *socket) {
   return result;
 }
 
-static bool zmqHasMore(void *socket) {
+bool zmqHasMore(void *socket) {
   int64_t more = 0;
   size_t more_size = sizeof(more);
   zmq_getsockopt(socket, ZMQ_RCVMORE, &more, &more_size);
@@ -238,7 +240,7 @@ leftv zmqLinkRead(si_link l) {
   return result;
 }
 
-static BOOLEAN zmqSendStr(void *socket, char *str, int flags) {
+BOOLEAN zmqSendStr(void *socket, char *str, int flags) {
   size_t len = strlen(str);
   zmq_msg_t msg;
   zmq_msg_init_size(&msg, len);
@@ -293,7 +295,7 @@ leftv zmqLinkRead2(si_link l, leftv count) {
   return NULL;
 }
 
-static const char *zmqStatus(si_link l, short mode) {
+const char *zmqStatus(si_link l, short mode) {
   zmq_pollitem_t ev;
   ev.socket = ((ZmqSocket *)(l->data))->socket;
   ev.fd = -1;
@@ -334,6 +336,9 @@ void zmqLinkInit() {
   s->next = si_link_root;
   si_link_root->next = s;
 }
+
+} // end of anonymous namespace block
+
 
 extern "C" int mod_init(SModulFunctions *fn)
 {
