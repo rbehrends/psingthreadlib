@@ -1,0 +1,29 @@
+# vi:filetype=tcl
+#
+# configuration for libzmq-singular
+
+use cc cc-shared
+
+options {
+  "singular:./singular" => "path to singular directory"
+  zmq: => "path to ZeroMQ installation"
+}
+
+set SINGULAR [opt-val singular ./singular]
+set ZMQ [opt-val zmq]
+
+set sing_includes [list -I$SINGULAR -I$SINGULAR/factory/include -I$SINGULAR/libpolys]
+set sing_libs {}
+
+
+if {[string compare [opt-val zmq] ""]} {
+  lappend sing_includes -I$ZMQ/include
+  lappend sing_libs -L$ZMQ/lib -Wl,-rpath -Wl,$ZMQ/lib
+}
+
+define SING_INCLUDES $sing_includes
+define SING_LIBS $sing_libs
+
+cc-check-includes zmq.h
+
+make-template Makefile.in
