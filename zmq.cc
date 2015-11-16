@@ -2,6 +2,7 @@
 #include "kernel/mod2.h"
 #include "Singular/ipid.h"
 #include "Singular/links/silink.h"
+#include "Singular/lists.h"
 #include <zmq.h>
 #include <cstring>
 #include <errno.h>
@@ -334,7 +335,7 @@ void zmqLinkInit() {
   s->Status = zmqLinkStatus;
   s->type = "zmq";
   s->next = si_link_root;
-  si_link_root->next = s;
+  si_link_root = s;
 }
 
 } // end of anonymous namespace block
