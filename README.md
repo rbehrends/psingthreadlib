@@ -13,3 +13,9 @@ installation (which must have `include` and `lib` subdirectories). The
 include and library paths.
 
 Copy `zmq.lib` and `zmq_core.so` to a location in your Singular path.
+
+# License
+
+The ZeroMQ Singular bindings are licensed under the GPLv2 (see files
+`COPYING.md` and `GPL2`). The `autosetup` build system in the
+`autosetup` directory has its own separate copyright and license.
