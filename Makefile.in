@@ -9,4 +9,6 @@ zmq.o: zmq.cc
 zmq_core.so: zmq.o
 	@CXX@ @LDFLAGS@ @SHOBJ_LDFLAGS@ -o zmq_core.so zmq.o @SING_LIBS@ -lzmq
 
-.PHONY: all clean
+install: zmq_core.so
+@INSTALLATION@
+.PHONY: all clean install

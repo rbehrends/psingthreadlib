@@ -7,14 +7,54 @@ use cc cc-shared
 options {
   "singular:./singular" => "path to singular directory"
   zmq: => "path to ZeroMQ installation"
+  location:local => {
+      If and where to install the ZeroMQ bindings.
+
+      local  - do not install them.
+      system - install them in the Singular directory.
+      <dir>  - install them in directory <dir>.
+  }
 }
 
 set SINGULAR [opt-val singular ./singular]
+
+if {![file isdirectory $SINGULAR]} {
+  user-error "Singular path is not a directory"
+}
+
 set ZMQ [opt-val zmq]
 
+set LOCATION_LIB {}
+set LOCATION_MOD {}
+
+switch -glob -- [opt-val location local] {
+  local {}
+  system {
+    set LOCATION_LIB $SINGULAR/Singular/LIB
+    set LOCATION_MOD $SINGULAR/Singular/MOD
+  }
+  /* {
+    set LOCATION_LIB [opt-val location]
+    set LOCATION_MOD [opt-val location]
+  }
+  ./* {
+    set LOCATION_LIB [opt-val location]
+    set LOCATION_MOD [opt-val location]
+  }
+  default {
+    user-error "Invalid value for --location"
+  }
+}
+
+if {[string equal $LOCATION_LIB ""]} {
+  define INSTALLATION ""
+} else {
+  define INSTALLATION "\ttools/install.sh -m 644 zmq.lib $LOCATION_LIB
+\ttools/install.sh -m 644 zmq_core.so $LOCATION_MOD
+"
+}
 set sing_includes [list -I$SINGULAR -I$SINGULAR/factory/include -I$SINGULAR/libpolys]
 set sing_libs {}
-
 
 if {[string compare [opt-val zmq] ""]} {
   lappend sing_includes -I$ZMQ/include
@@ -23,7 +63,5 @@ if {[string compare [opt-val zmq] ""]} {
 
 define SING_INCLUDES $sing_includes
 define SING_LIBS $sing_libs
-
-cc-check-includes zmq.h
 
 make-template Makefile.in
