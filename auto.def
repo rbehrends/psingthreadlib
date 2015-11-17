@@ -16,6 +16,18 @@ options {
   }
 }
 
+proc shell-quote {arg} {
+  switch -regexp -- arg {
+    {^\$} {return "''"}
+    {^[a-zA-Z0-9_@%+=:,./-]+$} {
+      return $arg
+    }
+    default {
+      return "'[string map {' '\"'\"'} $arg]'"
+    }
+  }
+}
+
 set SINGULAR [opt-val singular ./singular]
 
 if {![file isdirectory $SINGULAR]} {
@@ -49,26 +61,32 @@ switch -glob -- [opt-val location local] {
 if {[string equal $LOCATION_LIB ""]} {
   define INSTALLATION ""
 } else {
+  set LOCATION_LIB [shell-quote $LOCATION_LIB]
+  set LOCATION_MOD [shell-quote $LOCATION_MOD]
   define INSTALLATION "\ttools/install.sh -c -m 644 zmq.lib $LOCATION_LIB
 \ttools/install.sh -c -m 644 zmq_core.so $LOCATION_MOD
 "
 }
-set sing_includes [list -I$SINGULAR -I$SINGULAR/factory/include -I$SINGULAR/libpolys]
-set sing_libs {}
+set sing_includes ""
+foreach inc [list $SINGULAR $SINGULAR/factory/include $SINGULAR/libpolys] {
+  set sing_includes "$sing_includes [shell-quote -I$inc]"
+}
+set sing_libs ""
 
 if {[string compare [opt-val zmq] ""]} {
-  lappend sing_includes -I$ZMQ/include
+  set sing_includes "$sing_includes -I[shell-quote $ZMQ/include]"
+  set zmqlib [shell-quote $ZMQ/lib]
   switch -glob -- [get-define host] {
     *-*-darwin* {
-      lappend sing_libs -L$ZMQ/lib -Wl,-rpath -Wl,$ZMQ/lib
+      set sing_libs "-L$zmqlib -Wl,-rpath -Wl,$zmqlib"
     }
     default {
-      lappend sing_libs -L$ZMQ/lib -Wl,-rpath=$ZMQ/lib
+      set sing_libs "-L$zmqlib -Wl,-rpath=$zmqlib"
     }
   }
 }
 
-define SING_INCLUDES $sing_includes
-define SING_LIBS $sing_libs
+define SING_INCLUDES [string trim $sing_includes]
+define SING_LIBS [string trim $sing_libs]
 
 make-template Makefile.in
