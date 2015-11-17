@@ -28,7 +28,7 @@ proc shell-quote {arg} {
   }
 }
 
-set SINGULAR [opt-val singular ./singular]
+set SINGULAR [opt-val singular ./Singular]
 
 if {![file isdirectory $SINGULAR]} {
   user-error "Singular path is not a directory"
@@ -69,12 +69,12 @@ if {[string equal $LOCATION_LIB ""]} {
 }
 set sing_includes ""
 foreach inc [list $SINGULAR $SINGULAR/factory/include $SINGULAR/libpolys] {
-  set sing_includes "$sing_includes [shell-quote -I$inc]"
+  append sing_includes " [shell-quote -I$inc]"
 }
-set sing_libs ""
 
+set sing_libs ""
 if {[string compare [opt-val zmq] ""]} {
-  set sing_includes "$sing_includes -I[shell-quote $ZMQ/include]"
+  append sing_includes "$ -I[shell-quote $ZMQ/include]"
   set zmqlib [shell-quote $ZMQ/lib]
   switch -glob -- [get-define host] {
     *-*-darwin* {
