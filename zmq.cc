@@ -357,5 +357,5 @@ extern "C" int mod_init(SModulFunctions *fn)
   // fn->iiAddCproc(libname, "zmq_recv", FALSE, zmqRecv);
   // fn->iiAddCproc(libname, "zmq_recv_list", FALSE, zmqRecvList);
   fn->iiAddCproc(libname, "zmq_poll", FALSE, zmqPoll);
-  return 0;
+  return MAX_TOK;
 }
