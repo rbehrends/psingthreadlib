@@ -58,7 +58,14 @@ set sing_libs {}
 
 if {[string compare [opt-val zmq] ""]} {
   lappend sing_includes -I$ZMQ/include
-  lappend sing_libs -L$ZMQ/lib -Wl,-rpath -Wl,$ZMQ/lib
+  switch -glob -- [get-define host] {
+    *-*-darwin* {
+      lappend sing_libs -L$ZMQ/lib -Wl,-rpath -Wl,$ZMQ/lib
+    }
+    default {
+      lappend sing_libs -L$ZMQ/lib -Wl,-rpath=$ZMQ/lib
+    }
+  }
 }
 
 define SING_INCLUDES $sing_includes
