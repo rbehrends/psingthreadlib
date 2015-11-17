@@ -5,8 +5,8 @@
 use cc cc-shared
 
 options {
-  "singular:./singular" => "path to singular directory"
-  zmq: => "path to ZeroMQ installation"
+  singular:./Singular => "path to singular directory"
+  zmq: => "path to ZeroMQ installation (optional)"
   location:local => {
       If and where to install the ZeroMQ bindings.
 
