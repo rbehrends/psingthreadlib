@@ -49,8 +49,8 @@ switch -glob -- [opt-val location local] {
 if {[string equal $LOCATION_LIB ""]} {
   define INSTALLATION ""
 } else {
-  define INSTALLATION "\ttools/install.sh -m 644 zmq.lib $LOCATION_LIB
-\ttools/install.sh -m 644 zmq_core.so $LOCATION_MOD
+  define INSTALLATION "\ttools/install.sh -c -m 644 zmq.lib $LOCATION_LIB
+\ttools/install.sh -c -m 644 zmq_core.so $LOCATION_MOD
 "
 }
 set sing_includes [list -I$SINGULAR -I$SINGULAR/factory/include -I$SINGULAR/libpolys]
