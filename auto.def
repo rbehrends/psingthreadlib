@@ -17,9 +17,9 @@ options {
 }
 
 proc shell-quote {arg} {
-  switch -regexp -- arg {
-    {^\$} {return "''"}
-    {^[a-zA-Z0-9_@%+=:,./-]+$} {
+  switch -regexp -- $arg {
+    {^$} {return "''"}
+    {^[-a-zA-Z0-9_@%+=:,./]+$} {
       return $arg
     }
     default {
