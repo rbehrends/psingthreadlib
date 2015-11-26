@@ -4,6 +4,8 @@
 
 use cc cc-shared
 
+source autoutil.tcl
+
 options {
   singular:./Singular => "path to singular directory"
   zmq: => "path to ZeroMQ installation (optional)"
@@ -13,18 +15,6 @@ options {
       local  - do not install them.
       system - install them in the Singular directory.
       <dir>  - install them in directory <dir>.
-  }
-}
-
-proc shell-quote {arg} {
-  switch -regexp -- $arg {
-    {^$} {return "''"}
-    {^[-a-zA-Z0-9_@%+=:,./]+$} {
-      return $arg
-    }
-    default {
-      return "'[string map {' '\"'\"'} $arg]'"
-    }
   }
 }
 
@@ -67,14 +57,14 @@ if {[string equal $LOCATION_LIB ""]} {
 \ttools/install.sh -c -m 644 zmq_core.so $LOCATION_MOD
 "
 }
-set sing_includes ""
+set sing_includes {}
 foreach inc [list $SINGULAR $SINGULAR/factory/include $SINGULAR/libpolys] {
-  append sing_includes " [shell-quote -I$inc]"
+  lappend sing_includes $inc
 }
 
 set sing_libs ""
 if {[string compare [opt-val zmq] ""]} {
-  append sing_includes "$ -I[shell-quote $ZMQ/include]"
+  lappend sing_includes $ZMQ/include
   set zmqlib [shell-quote $ZMQ/lib]
   switch -glob -- [get-define host] {
     *-*-darwin* {
@@ -86,7 +76,7 @@ if {[string compare [opt-val zmq] ""]} {
   }
 }
 
-define SING_INCLUDES [string trim $sing_includes]
-define SING_LIBS [string trim $sing_libs]
+define SING_INCLUDES [-I {*}$sing_includes]
+define SING_LIBS $sing_libs
 
 make-template Makefile.in
