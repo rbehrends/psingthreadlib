@@ -1,15 +1,15 @@
 all: singthreads.so
 
 clean:
-	rm -f singthreads.o singthreads.so
+	rm -f regions.o shared.o lintree.o
 
-regions.o: regions.cc
+regions.o: regions.cc regions.h
 	@CXX@ @CXXFLAGS@ @SING_INCLUDES@ @SHOBJ_CFLAGS@ -c regions.cc
 
-shared.o: shared.cc
+shared.o: shared.cc shared.h lintree.h
 	@CXX@ @CXXFLAGS@ @SING_INCLUDES@ @SHOBJ_CFLAGS@ -c shared.cc
 
-lintree.o: lintree.cc
+lintree.o: lintree.cc lintree.h
 	@CXX@ @CXXFLAGS@ @SING_INCLUDES@ @SHOBJ_CFLAGS@ -c lintree.cc
 
 
