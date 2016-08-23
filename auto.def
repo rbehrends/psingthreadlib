@@ -1,6 +1,6 @@
 # vi:filetype=tcl
 #
-# configuration for libzmq-singular
+# configuration for libsingthreads
 
 use cc cc-shared
 
@@ -8,9 +8,8 @@ source autoutil.tcl
 
 options {
   singular:./Singular => "path to singular directory"
-  zmq: => "path to ZeroMQ installation (optional)"
   location:local => {
-      If and where to install the ZeroMQ bindings.
+      If and where to install the Singular thread bindings.
 
       local  - do not install them.
       system - install them in the Singular directory.
@@ -23,8 +22,6 @@ set SINGULAR [opt-val singular ./Singular]
 if {![file isdirectory $SINGULAR]} {
   user-error "Singular path is not a directory"
 }
-
-set ZMQ [opt-val zmq]
 
 set LOCATION_LIB {}
 set LOCATION_MOD {}
@@ -53,8 +50,8 @@ if {[string equal $LOCATION_LIB ""]} {
 } else {
   set LOCATION_LIB [shell-quote $LOCATION_LIB]
   set LOCATION_MOD [shell-quote $LOCATION_MOD]
-  define INSTALLATION "\ttools/install.sh -c -m 644 zmq.lib $LOCATION_LIB
-\ttools/install.sh -c -m 644 zmq_core.so $LOCATION_MOD
+  define INSTALLATION "\ttools/install.sh -c -m 644 systhreads.lib $LOCATION_LIB
+\ttools/install.sh -c -m 644 systhreads.so $LOCATION_MOD
 "
 }
 set sing_includes {}
@@ -63,18 +60,6 @@ foreach inc [list $SINGULAR $SINGULAR/factory/include $SINGULAR/libpolys] {
 }
 
 set sing_libs ""
-if {[string compare [opt-val zmq] ""]} {
-  lappend sing_includes $ZMQ/include
-  set zmqlib [shell-quote $ZMQ/lib]
-  switch -glob -- [get-define host] {
-    *-*-darwin* {
-      set sing_libs "-L$zmqlib -Wl,-rpath -Wl,$zmqlib"
-    }
-    default {
-      set sing_libs "-L$zmqlib -Wl,-rpath=$zmqlib"
-    }
-  }
-}
 
 define SING_INCLUDES [-I {*}$sing_includes]
 define SING_LIBS $sing_libs
