@@ -46,6 +46,7 @@ SharedObject *makeSharedObject(SharedObjectTable &table,
       result = NULL;
   } else {
     result = scons();
+    result->set_type(type);
     table.insert(make_pair<string,SharedObject *>(name, result));
   }
   if (!was_locked)
@@ -63,7 +64,6 @@ protected:
       lock->lock();
     else {
       if (!lock->is_locked()) {
-        WerrorS("table access: region not locked");
 	return 0;
       }
     }
@@ -75,20 +75,17 @@ protected:
   }
 public:
   Transactional() :
-      SharedObject(), region(NULL) {
-    lock = NULL;
-    if (!region)
-      lock = new Lock();
+      SharedObject(), region(NULL), lock(NULL) {
   }
-  Transactional(Region *region_init) :
-      SharedObject(), region(region_init) {
-    lock = NULL;
-    if (!region)
+  void set_region(Region *region_init) {
+    region = region_init;
+    if (region_init) {
+      lock = region_init->get_lock();
+    } else {
       lock = new Lock();
-    else
-      lock = region->get_lock();
+    }
   }
-  virtual ~Transactional() { if (!region) delete lock; }
+  virtual ~Transactional() { if (!region && lock) delete lock; }
 };
 
 class TxTable: public Transactional {
@@ -96,7 +93,6 @@ private:
   map<string, string> entries;
 public:
   TxTable() : Transactional(), entries() { }
-  TxTable(Region *region_init): Transactional(region_init), entries() { }
   virtual ~TxTable() { }
   int put(string &key, string &value) {
     int result = 0;
@@ -134,7 +130,6 @@ private:
   vector<string> entries;
 public:
   TxList() : Transactional(), entries() { }
-  TxList(Region *region_init): Transactional(region_init), entries() { }
   virtual ~TxList() { }
   int put(size_t index, string &value) {
     int result = -1;
@@ -359,6 +354,7 @@ BOOLEAN makeAtomicTable(leftv result, leftv arg) {
   string uri = str(arg);
   SharedObject *obj = makeSharedObject(global_objects,
     &global_objects_lock, type_atomic_table, uri, consTable);
+  ((TxTable *) obj)->set_region(NULL);
   result->rtyp = type_atomic_table;
   result->data = new_shared(obj);
   return FALSE;
@@ -459,7 +455,7 @@ BOOLEAN getTable(leftv result, leftv arg) {
     WerrorS("getTable: not a valid table key");
     return TRUE;
   }
-  TxTable *table = (TxTable *) arg->Data();
+  TxTable *table = *(TxTable **) arg->Data();
   string key = (char *)(arg->next->Data());
   string value;
   int success = table->get(key, value);
@@ -488,7 +484,7 @@ BOOLEAN inTable(leftv result, leftv arg) {
     WerrorS("inTable: not a valid table key");
     return TRUE;
   }
-  TxTable *table = (TxTable *) arg->Data();
+  TxTable *table = *(TxTable **) arg->Data();
   string key = (char *)(arg->next->Data());
   int success = table->check(key);
   if (success < 0) {
@@ -511,7 +507,7 @@ BOOLEAN putTable(leftv result, leftv arg) {
     WerrorS("putTable: not a valid table key");
     return TRUE;
   }
-  TxTable *table = (TxTable *) arg->Data();
+  TxTable *table = *(TxTable **) arg->Data();
   string key = (char *)(arg->next->Data());
   string value = LinTree::to_string(arg->next->next);
   int success = table->put(key, value);

@@ -4,6 +4,7 @@
 #include "thread.h"
 #include <map>
 #include <string>
+#include <stdio.h>
 
 class SharedObject {
 private:
@@ -34,8 +35,9 @@ void acquireShared(SharedObject *obj) {
 }
 
 void releaseShared(SharedObject *obj) {
-  if (obj->decref() == 0)
+  if (obj->decref() == 0) {
     delete obj;
+  }
 }
 
 typedef std::map<std::string, SharedObject *> SharedObjectTable;
