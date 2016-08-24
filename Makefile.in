@@ -3,9 +3,6 @@ all: singthreads.so
 clean:
 	rm -f regions.o shared.o lintree.o
 
-regions.o: regions.cc regions.h thread.h
-	@CXX@ @CXXFLAGS@ @SING_INCLUDES@ @SHOBJ_CFLAGS@ -c regions.cc
-
 shared.o: shared.cc shared.h lintree.h thread.h
 	@CXX@ @CXXFLAGS@ @SING_INCLUDES@ @SHOBJ_CFLAGS@ -c shared.cc
 
@@ -16,7 +13,7 @@ thread.o: thread.cc thread.h
 	@CXX@ @CXXFLAGS@ @SING_INCLUDES@ @SHOBJ_CFLAGS@ -c thread.cc
 
 
-singthreads.so: regions.o shared.o lintree.o
+singthreads.so: thread.o shared.o lintree.o
 	@CXX@ @LDFLAGS@ @SHOBJ_LDFLAGS@ -o singthreads.so $^
 
 install: singthreads.so
