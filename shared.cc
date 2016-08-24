@@ -279,7 +279,9 @@ public:
     lock.lock();
     if (!init) {
       value = item;
+      init = 1;
       cond.broadcast();
+      result = 1;
     }
     lock.unlock();
     return result;
@@ -307,6 +309,15 @@ void *new_shared(SharedObject *obj) {
 
 void shared_destroy(blackbox *b, void *d) {
   SharedObject *obj = *(SharedObject **)d;
+  if (obj) {
+    releaseShared(*(SharedObject **)d);
+    *(SharedObject **)d = NULL;
+  }
+}
+
+void rlock_destroy(blackbox *b, void *d) {
+  SharedObject *obj = *(SharedObject **)d;
+  ((Region *) obj)->unlock();
   if (obj) {
     releaseShared(*(SharedObject **)d);
     *(SharedObject **)d = NULL;
@@ -344,6 +355,30 @@ BOOLEAN shared_assign(leftv l, leftv r) {
   }
   return FALSE;
 }
+
+BOOLEAN rlock_assign(leftv l, leftv r) {
+  if (r->Typ() == l->Typ()) {
+    if (l->rtyp == IDHDL) {
+      omFree(IDDATA((idhdl)l->data));
+      IDDATA((idhdl)l->data) = (char*)shared_copy(NULL,r->Data());
+    } else {
+      leftv ll=l->LData();
+      if (ll==NULL)
+      {
+	return TRUE; // out of array bounds or similiar
+      }
+      rlock_destroy(NULL, ll->data);
+      omFree(ll->data);
+      ll->data = shared_copy(NULL,r->Data());
+    }
+  } else {
+    Werror("assign %s(%d) = %s(%d)",
+        Tok2Cmdname(l->Typ()),l->Typ(),Tok2Cmdname(r->Typ()),r->Typ());
+    return TRUE;
+  }
+  return FALSE;
+}
+
 
 BOOLEAN shared_check_assign(blackbox *b, leftv l, leftv r) {
   int lt = l->Typ();
@@ -390,6 +425,15 @@ char *shared_string(blackbox *b, void *d) {
   else if (type == type_region)
     type_name = "region";
   sprintf(buf, "<%s \"%.40s\">", type_name, name.c_str());
+  return omStrDup(buf);
+}
+
+char *rlock_string(blackbox *b, void *d) {
+  char buf[80];
+  SharedObject *obj = *(SharedObject **)d;
+  if (!obj)
+    return omStrDup("<uninitialized region lock>");
+  sprintf(buf, "<region lock \"%.40s\">", obj->get_name().c_str());
   return omStrDup(buf);
 }
 
@@ -695,7 +739,8 @@ BOOLEAN lockRegion(leftv result, leftv arg) {
     return TRUE;
   }
   region->lock();
-  result->rtyp = NONE;
+  result->rtyp = type_regionlock;
+  result->data = new_shared(region);
   return FALSE;
 }
 
@@ -714,6 +759,65 @@ BOOLEAN unlockRegion(leftv result, leftv arg) {
   return FALSE;
 }
 
+BOOLEAN sendChannel(leftv result, leftv arg) {
+  if (wrong_num_args("sendChannel", arg, 2))
+    return TRUE;
+  if (arg->Typ() != type_channel) {
+    WerrorS("sendChannel: argument is not a channel");
+    return TRUE;
+  }
+  Channel *channel = *(Channel **)arg->Data();
+  channel->send(LinTree::to_string(arg->next));
+  result->rtyp = NONE;
+  return FALSE;
+}
+
+BOOLEAN receiveChannel(leftv result, leftv arg) {
+  if (wrong_num_args("receiveChannel", arg, 1))
+    return TRUE;
+  if (arg->Typ() != type_channel) {
+    WerrorS("receiveChannel: argument is not a channel");
+    return TRUE;
+  }
+  Channel *channel = *(Channel **)arg->Data();
+  string item = channel->receive();
+  leftv val = LinTree::from_string(item);
+  result->rtyp = val->Typ();
+  result->data = val->Data();
+  return FALSE;
+}
+
+BOOLEAN writeSyncVar(leftv result, leftv arg) {
+  if (wrong_num_args("writeSyncVar", arg, 2))
+    return TRUE;
+  if (arg->Typ() != type_syncvar) {
+    WerrorS("writeSyncVar: argument is not a syncvar");
+    return TRUE;
+  }
+  SyncVar *syncvar = *(SyncVar **)arg->Data();
+  if (!syncvar->write(LinTree::to_string(arg->next))) {
+    WerrorS("writeSyncVar: variable already has a value");
+    return TRUE;
+  }
+  result->rtyp = NONE;
+  return FALSE;
+}
+
+BOOLEAN readSyncVar(leftv result, leftv arg) {
+  if (wrong_num_args("readSyncVar", arg, 1))
+    return TRUE;
+  if (arg->Typ() != type_syncvar) {
+    WerrorS("readSyncVar: argument is not a syncvar");
+    return TRUE;
+  }
+  SyncVar *syncvar = *(SyncVar **)arg->Data();
+  string item = syncvar->read();
+  leftv val = LinTree::from_string(item);
+  result->rtyp = val->Typ();
+  result->data = val->Data();
+  return FALSE;
+}
+
 void makeSharedType(int &type, const char *name) {
   blackbox *b=(blackbox*)omAlloc0(sizeof(blackbox));
   b->blackbox_Init = shared_init;
@@ -724,6 +828,17 @@ void makeSharedType(int &type, const char *name) {
   b->blackbox_CheckAssign = shared_check_assign;
   // b->blackbox_Op2 = shared_op2;
   // b->blackbox_Op3 = shared_op3;
+  type = setBlackboxStuff(b, name);
+}
+
+void makeRegionlockType(int &type, const char *name) {
+  blackbox *b=(blackbox*)omAlloc0(sizeof(blackbox));
+  b->blackbox_Init = shared_init;
+  b->blackbox_destroy = rlock_destroy;
+  b->blackbox_Copy = shared_copy;
+  b->blackbox_String = shared_string;
+  b->blackbox_Assign = rlock_assign;
+  b->blackbox_CheckAssign = shared_check_assign;
   type = setBlackboxStuff(b, name);
 }
 
@@ -741,7 +856,7 @@ extern "C" int mod_init(SModulFunctions *fn)
   makeSharedType(type_channel, "channel");
   makeSharedType(type_syncvar, "syncvar");
   makeSharedType(type_region, "region");
-  makeSharedType(type_regionlock, "regionlock");
+  makeRegionlockType(type_regionlock, "regionlock");
 
   fn->iiAddCproc(libname, "putTable", FALSE, putTable);
   fn->iiAddCproc(libname, "getTable", FALSE, getTable);
@@ -750,6 +865,10 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "getList", FALSE, getList);
   fn->iiAddCproc(libname, "lockRegion", FALSE, lockRegion);
   fn->iiAddCproc(libname, "unlockRegion", FALSE, unlockRegion);
+  fn->iiAddCproc(libname, "sendChannel", FALSE, sendChannel);
+  fn->iiAddCproc(libname, "receiveChannel", FALSE, receiveChannel);
+  fn->iiAddCproc(libname, "writeSyncVar", FALSE, writeSyncVar);
+  fn->iiAddCproc(libname, "readSyncVar", FALSE, readSyncVar);
 
   fn->iiAddCproc(libname, "makeAtomicTable", FALSE, makeAtomicTable);
   fn->iiAddCproc(libname, "makeAtomicList", FALSE, makeAtomicList);
