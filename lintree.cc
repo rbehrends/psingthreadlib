@@ -85,6 +85,7 @@ void encode(LinTree &lintree, leftv val) {
     if (enc_ring && !lintree.has_last_ring()) {
       lintree.put_int(-1);
       encode_ring(lintree, currRing);
+      lintree.set_last_ring(currRing);
     }
     lintree.put_int(typ);
     fn(lintree, val);
@@ -96,7 +97,8 @@ leftv decode(LinTree &lintree) {
   ring decode_ring_raw(LinTree &lintree);
   int typ = lintree.get_int();
   if (typ < 0) {
-    (void) decode_ring_raw(lintree);
+    lintree.set_last_ring(decode_ring_raw(lintree));
+    typ = lintree.get_int();
   }
   LinTreeDecodeFunc fn = decoders[typ];
   return fn(lintree);
@@ -244,9 +246,9 @@ void encode_poly(LinTree &lintree, int typ, poly p, const ring r) {
   lintree.put_int(pLength(p));
   while (p != NULL) {
     encode_number_cf(lintree, pGetCoeff(p), r->cf);
-    lintree.put<long>(p_GetComp(p, r));
+    lintree.put_int(p_GetComp(p, r));
     for (int j=1; j<=rVar(r); j++) {
-      lintree.put<long>(p_GetExp(p, j, r));
+      lintree.put_int(p_GetExp(p, j, r));
     }
     pIter(p);
   }
@@ -302,6 +304,14 @@ void ref_poly(LinTree &lintree, int by) {
 }
 
 // IDEAL_CMD
+ideal decode_ideal(LinTree &lintree, int typ, const ring r) {
+  int n = lintree.get_int();
+  ideal I = idInit(n, 1);
+  for (int i=0; i<IDELEMS(I); i++)
+    I->m[i] = decode_poly(lintree, r);
+  return I;
+}
+
 void encode_ideal(LinTree &lintree, int typ, const ideal I, const ring R) {
   matrix M = (matrix) I;
   int mn;
@@ -376,6 +386,9 @@ void encode_ring(LinTree &lintree, const ring r) {
     lintree.put_cstring(r->names[i]);
   }
   int i = 0;
+  if (r->order) while (r->order[i] != 0) i++;
+  lintree.put_int(i);
+  i = 0;
   if (r->order) while (r->order[i] != 0) {
     lintree.put_int(r->order[i]);
     lintree.put_int(r->block0[i]);
@@ -405,6 +418,7 @@ void encode_ring(LinTree &lintree, const ring r) {
     encode_ring(lintree, r->cf->extRing);
   }
   if (r->qideal) {
+    lintree.put_int(IDEAL_CMD);
     encode_ideal(lintree, IDEAL_CMD, r->qideal, r);
   } else {
     lintree.put_int(0);
@@ -412,7 +426,7 @@ void encode_ring(LinTree &lintree, const ring r) {
 }
 
 void encode_ring(LinTree &lintree, leftv val) {
-  encode_ring(lintree, (ring) val->data);
+  encode_ring(lintree, (ring) val->Data());
 }
 
 ring decode_ring_raw(LinTree &lintree) {
@@ -503,6 +517,9 @@ ring decode_ring_raw(LinTree &lintree) {
       r = rDefault(cf, N, names, num_ord, ord, block0, block1, wvhdl);
     }
     lintree.set_last_ring(r);
+    if (lintree.get_int()) {
+      r->qideal = decode_ideal(lintree, IDEAL_CMD, r);
+    }
     return r;
   }
 }
