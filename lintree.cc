@@ -41,10 +41,9 @@ using namespace std;
 vector<LinTreeEncodeFunc> encoders;
 vector<LinTreeDecodeFunc> decoders;
 vector<LinTreeRefFunc> refupdaters;
+vector<char> needs_ring;
 
-#define RING_PREFIX 65536
-
-void install(int code,
+void install(int typ,
   LinTreeEncodeFunc enc,
   LinTreeDecodeFunc dec,
   LinTreeRefFunc ref)
@@ -52,14 +51,57 @@ void install(int code,
   size_t n;
   for (;;) {
     n = encoders.size();
-    if (n > code) break;
+    if (n > typ) break;
     encoders.resize(n * 2);
     decoders.resize(n * 2);
     refupdaters.resize(n * 2);
+    needs_ring.resize(n * 2);
   }
-  encoders[code] = enc;
-  decoders[code] = dec;
-  refupdaters[code] = ref;
+  encoders[typ] = enc;
+  decoders[typ] = dec;
+  refupdaters[typ] = ref;
+}
+
+void set_needs_ring(int typ) {
+  needs_ring[typ] = 1;
+}
+
+void encode(LinTree &lintree, leftv val) {
+  void encode_ring(LinTree &lintree, const ring r);
+  int typ = val->Typ();
+  char enc_ring = 0;
+  LinTreeEncodeFunc fn;
+  if (typ < encoders.size()) {
+    fn = encoders[typ];
+    enc_ring = needs_ring[typ];
+  }
+  else
+    fn = NULL;
+  if (fn) {
+    if (enc_ring && !lintree.has_last_ring()) {
+      lintree.put_int(-1);
+      encode_ring(lintree, currRing);
+    }
+    lintree.put_int(typ);
+    fn(lintree, val);
+  } else
+    lintree.mark_error("trying to share unsupported data type");
+}
+
+leftv decode(LinTree &lintree) {
+  ring decode_ring_raw(LinTree &lintree);
+  int typ = lintree.get_int();
+  if (typ < 0) {
+    (void) decode_ring_raw(lintree);
+  }
+  LinTreeDecodeFunc fn = decoders[typ];
+  return fn(lintree);
+}
+
+void updateref(LinTree &lintree, int by) {
+  int typ = lintree.get_int();
+  LinTreeRefFunc fn = refupdaters[typ];
+  fn(lintree, by);
 }
 
 leftv new_leftv(int code, void *data) {
@@ -118,7 +160,78 @@ void ref_string(LinTree &lintree, int by) {
 // NUMBER_CMD
 
 void encode_number_cf(LinTree &lintree, const number n, const coeffs cf) {
-  // TODO
+  void encode_poly(LinTree &lintree, int typ, poly p, const ring r);
+  n_coeffType ct = getCoeffType(cf);
+  // lintree.put_int((int)ct);
+  switch (ct) {
+    case n_transExt:
+      {
+      fraction f= (fraction) n;
+      encode_poly(lintree, POLY_CMD, NUM(f), cf->extRing);
+      encode_poly(lintree, POLY_CMD, DEN(f), cf->extRing);
+      }
+      break;
+    case n_algExt:
+      encode_poly(lintree, POLY_CMD, (poly) n, cf->extRing);
+      break;
+    case n_Zp:
+      lintree.put<long>((long) n);
+      break;
+    default:
+      lintree.mark_error("coefficient type not supported");
+      break;
+  }
+}
+
+number decode_number_cf(LinTree &lintree, const coeffs cf) {
+  poly decode_poly(LinTree &lintree, const ring r);
+  n_coeffType ct = getCoeffType(cf);
+  switch (ct) {
+    case n_transExt:
+      {
+      fraction f= (fraction) n_Init(1, cf);
+      NUM(f) = decode_poly(lintree, cf->extRing);
+      DEN(f) = decode_poly(lintree, cf->extRing);
+      return (number) f;
+      }
+    case n_algExt:
+      return (number) decode_poly(lintree, cf->extRing);
+    case n_Zp:
+      return (number) (lintree.get<long>());
+    default:
+      lintree.mark_error("coefficient type not supported");
+      return NULL;
+  }
+}
+
+leftv decode_number(LinTree &lintree) {
+  return new_leftv(NUMBER_CMD,
+    decode_number_cf(lintree, ((ring)lintree.get_last_ring())->cf));
+}
+
+void encode_number(LinTree &lintree, leftv val) {
+  encode_number_cf(lintree, (number)val->Data(),
+    ((ring) lintree.get_last_ring())->cf);
+}
+
+void ref_number(LinTree &lintree, int by) {
+  void ref_poly(LinTree &lintree, int by);
+  coeffs cf = ((ring) lintree.get_last_ring())->cf;
+  switch (getCoeffType(cf)) {
+    case n_transExt:
+      ref_poly(lintree, by);
+      ref_poly(lintree, by);
+      break;
+    case n_algExt:
+      ref_poly(lintree, by);
+      break;
+    case n_Zp:
+      lintree.skip<long>();
+      break;
+    default:
+      abort(); // should never happen
+      break;
+  }
 }
 
 // POLY_CMD
@@ -143,12 +256,45 @@ void encode_poly(LinTree &lintree, leftv val) {
   encode_poly(lintree, val->Typ(), (poly) val->Data());
 }
 
-leftv decode_poly(LinTree &lintree) {
-  // TODO
-  return NULL;
+poly decode_poly(LinTree &lintree, const ring r) {
+  int len = lintree.get_int();
+  poly p;
+  poly ret = NULL;
+  poly prev = NULL;
+  for (int l = 0; l < len; l++) {
+    p = p_Init(r);
+    pSetCoeff0(p, decode_number_cf(lintree, r->cf));
+    int d;
+    d = lintree.get_int();
+    p_SetComp(p, d, r);
+    for(int i=1;i<=rVar(r);i++)
+    {
+      d=lintree.get_int();
+      p_SetExp(p,i,d,r);
+    }
+    p_Setm(p,r);
+    p_Test(p,r);
+    if (ret==NULL) ret=p;
+    else           pNext(prev)=p;
+    prev=p;
+  }
+  return ret;
 }
 
-void ref_poly(LinTree &lintree) {
+leftv decode_poly(LinTree &lintree) {
+  ring r = (ring) lintree.get_last_ring();
+  return new_leftv(POLY_CMD, decode_poly(lintree, r));
+}
+
+void ref_poly(LinTree &lintree, int by) {
+  ring r = (ring) lintree.get_last_ring();
+  int len = lintree.get_int();
+  for (int l = 0; l <len; l++) {
+    ref_number(lintree, by);
+    lintree.skip_int();
+    for (int i=1; i<=rVar(r); i++)
+      lintree.skip_int();
+  }
 }
 
 // IDEAL_CMD
@@ -352,6 +498,7 @@ ring decode_ring_raw(LinTree &lintree) {
     } else if (ch == -3) {
       r = rDefault(cf, N, names, num_ord, ord, block0, block1, wvhdl);
     }
+    lintree.set_last_ring(r);
     return r;
   }
 }
@@ -396,15 +543,75 @@ void ref_ring(LinTree &lintree, int by) {
   }
 }
 
+// LIST_CMD
+
+void encode_list(LinTree &lintree, leftv val) {
+  lists l = (lists) val->Data();
+  int n = lSize(l);
+  lintree.put_int(n);
+  for (int i=0; i<n; i++) {
+    encode(lintree, &l->m[i]);
+  }
+}
+
+leftv decode_list(LinTree &lintree) {
+  int n = lintree.get_int();
+  lists l = (lists)omAlloc(sizeof(*l));
+  l->Init(n);
+  for (int i=0; i<n; i++) {
+    leftv val = decode(lintree);
+    memcpy(&l->m[i], val, sizeof(*val));
+    omFreeBin(val, sleftv_bin);
+  }
+  return new_leftv(LIST_CMD, l);
+}
+
+void ref_list(LinTree &lintree, int by) {
+  int n = lintree.get_int();
+  for (int i = 0; i < n; i++) {
+    updateref(lintree, by);
+  }
+}
+
+std::string to_string(leftv val) {
+  LinTree lintree;
+  encode(lintree, val);
+  return lintree.to_string();
+}
+
+leftv from_string(std::string &str) {
+  LinTree lintree(str);
+  return decode(lintree);
+}
+
 void init() {
   install(INT_CMD, encode_int, decode_int, ref_int);
+  install(LIST_CMD, encode_list, decode_list, ref_list);
   install(STRING_CMD, encode_string, decode_string, ref_string);
+  install(NUMBER_CMD, encode_number, decode_number, ref_number);
+  set_needs_ring(NUMBER_CMD);
+  install(RING_CMD, encode_ring, decode_ring, ref_ring);
+  install(POLY_CMD, encode_poly, decode_poly, ref_poly);
+  set_needs_ring(POLY_CMD);
 }
 
-LinTree::LinTree() : cursor(0), memory() {
+LinTree::LinTree() : cursor(0), memory(), error(NULL), last_ring(NULL) {
 }
 
-LinTree::LinTree(std::string &source) : cursor(0), memory(source) {
+LinTree::LinTree(std::string &source) :
+  cursor(0), memory(source), error(NULL), last_ring(NULL) {
+}
+
+void LinTree::set_last_ring(void *r) {
+  if (last_ring)
+    rKill((ring) last_ring);
+  last_ring = r;
+  if (r) ((ring) r)->ref++;
+}
+
+LinTree::~LinTree() {
+  if (last_ring)
+    rKill((ring) last_ring);
 }
 
 }

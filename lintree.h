@@ -26,6 +26,7 @@ private:
   void *last_ring;
 public:
   LinTree();
+  ~LinTree();
   LinTree(std::string &source);
   void rewind() { cursor = 0; }
   void clear() { memory.clear(); cursor = 0; error = NULL; last_ring = NULL; }
@@ -93,9 +94,7 @@ public:
   std::string &to_string() {
     return memory;
   }
-  void set_last_ring(void *r) {
-    last_ring = r;
-  }
+  void set_last_ring(void *r);
   int has_last_ring() {
     return last_ring != NULL;
   }
@@ -103,6 +102,9 @@ public:
     return last_ring;
   }
 };
+
+std::string to_string(leftv val);
+leftv from_string(std::string &str);
 
 };
 
