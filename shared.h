@@ -44,22 +44,22 @@ typedef std::map<std::string, SharedObject *> SharedObjectTable;
 
 class Region : public SharedObject {
 private:
-  Lock *region_lock;
+  Lock region_lock;
 public:
   SharedObjectTable objects;
   Region() : SharedObject(), region_lock(), objects() { }
   virtual ~Region() { }
-  Lock *get_lock() { return region_lock; }
+  Lock *get_lock() { return &region_lock; }
   void lock() {
-    if (!region_lock->is_locked())
-      region_lock->lock();
+    if (!region_lock.is_locked())
+      region_lock.lock();
   }
   void unlock() {
-    if (region_lock->is_locked())
-      region_lock->unlock();
+    if (region_lock.is_locked())
+      region_lock.unlock();
   }
   int is_locked() {
-    return region_lock->is_locked();
+    return region_lock.is_locked();
   }
 };
 

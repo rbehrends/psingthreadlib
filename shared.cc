@@ -1,6 +1,7 @@
 #include <iostream>
 #include "kernel/mod2.h"
 #include "Singular/ipid.h"
+#include "Singular/ipshell.h"
 #include "Singular/links/silink.h"
 #include "Singular/lists.h"
 #include "Singular/blackbox.h"
@@ -228,20 +229,25 @@ void *shared_init(blackbox *b) {
 
 void *new_shared(SharedObject *obj) {
   acquireShared(obj);
-  void *result = omAlloc0(sizeof(long));
+  void *result = omAlloc0(sizeof(SharedObject *));
   *(SharedObject **)result = obj;
   return result;
 }
 
 void shared_destroy(blackbox *b, void *d) {
-  releaseShared(*(SharedObject **)d);
-  *(SharedObject **)d = NULL;
+  SharedObject *obj = *(SharedObject **)d;
+  if (obj) {
+    releaseShared(*(SharedObject **)d);
+    *(SharedObject **)d = NULL;
+  }
 }
 
 void *shared_copy(blackbox *b, void *d) {
+  SharedObject *obj = *(SharedObject **)d;
   void *result = shared_init(b);
-  *(SharedObject **)result = *(SharedObject **)d;
-  acquireShared(*(SharedObject **)result);
+  *(SharedObject **)result = obj;
+  if (obj)
+    acquireShared(obj);
   return result;
 }
 
@@ -259,6 +265,22 @@ BOOLEAN shared_assign(leftv l, leftv r) {
       omFree(ll->data);
       ll->data = shared_copy(NULL,r->Data());
     }
+  } else {
+    Werror("assign %s(%d) = %s(%d)",
+        Tok2Cmdname(l->Typ()),l->Typ(),Tok2Cmdname(r->Typ()),r->Typ());
+    return TRUE;
+  }
+  return FALSE;
+}
+
+BOOLEAN shared_check_assign(blackbox *b, leftv l, leftv r) {
+  int lt = l->Typ();
+  int rt = r->Typ();
+  if (lt != DEF_CMD && lt != rt) {
+    const char *rn=Tok2Cmdname(rt);
+    const char *ln=Tok2Cmdname(lt);
+    Werror("cannot assign %s (%d) to %s (%d)\n", rn, rt, ln, lt);
+    return TRUE;
   }
   return FALSE;
 }
@@ -266,6 +288,8 @@ BOOLEAN shared_assign(leftv l, leftv r) {
 char *shared_string(blackbox *b, void *d) {
   char buf[32];
   SharedObject *obj = *(SharedObject **)d;
+  if (!obj)
+    return omStrDup("<uninitialized shared object>");
   int type = obj->get_type();
   const char *type_name = "unknown";
   if (type == type_channel)
@@ -280,6 +304,8 @@ char *shared_string(blackbox *b, void *d) {
     type_name = "shared_list";
   else if (type == type_syncvar)
     type_name = "syncvar";
+  else if (type == type_region)
+    type_name = "region";
   sprintf(buf, "<%s %p>", type_name, (void *)obj);
   return omStrDup(buf);
 }
@@ -368,6 +394,7 @@ BOOLEAN makeAtomicList(leftv result, leftv arg) {
   string uri = str(arg);
   SharedObject *obj = makeSharedObject(global_objects,
     &global_objects_lock, type_atomic_list, uri, consList);
+  ((TxList *) obj)->set_region(NULL);
   result->rtyp = type_atomic_list;
   result->data = new_shared(obj);
   return FALSE;
@@ -380,10 +407,12 @@ BOOLEAN makeSharedTable(leftv result, leftv arg) {
     return TRUE;
   if (not_a_uri("makeSharedTable", arg->next))
     return TRUE;
-  Region *region = (Region *) arg->Data();
+  Region *region = *(Region **) arg->Data();
+  fflush(stdout);
   string s = str(arg->next);
   SharedObject *obj = makeSharedObject(region->objects,
     region->get_lock(), type_shared_table, s, consTable);
+  ((TxTable *) obj)->set_region(region);
   result->rtyp = type_shared_table;
   result->data = new_shared(obj);
   return FALSE;
@@ -396,10 +425,11 @@ BOOLEAN makeSharedList(leftv result, leftv arg) {
     return TRUE;
   if (not_a_uri("makeSharedList", arg->next))
     return TRUE;
-  Region *region = (Region *) arg->Data();
+  Region *region = *(Region **) arg->Data();
   string s = str(arg->next);
   SharedObject *obj = makeSharedObject(region->objects,
     region->get_lock(), type_shared_list, s, consList);
+  ((TxList *) obj)->set_region(region);
   result->rtyp = type_shared_list;
   result->data = new_shared(obj);
   return FALSE;
@@ -526,6 +556,7 @@ void makeSharedType(int &type, const char *name) {
   b->blackbox_Copy = shared_copy;
   b->blackbox_String = shared_string;
   b->blackbox_Assign = shared_assign;
+  b->blackbox_CheckAssign = shared_check_assign;
   type = setBlackboxStuff(b, name);
 }
 
@@ -555,5 +586,8 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "makeChannel", FALSE, makeChannel);
   fn->iiAddCproc(libname, "makeSyncVar", FALSE, makeSyncVar);
   fn->iiAddCproc(libname, "makeRegion", FALSE, makeRegion);
+
+  LinTree::init();
+
   return MAX_TOK;
 }

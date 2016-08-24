@@ -52,10 +52,14 @@ void install(int typ,
   for (;;) {
     n = encoders.size();
     if (n > typ) break;
-    encoders.resize(n * 2);
-    decoders.resize(n * 2);
-    refupdaters.resize(n * 2);
-    needs_ring.resize(n * 2);
+    if (n == 0)
+      n = 256;
+    else
+      n = n * 2;
+    encoders.resize(n);
+    decoders.resize(n);
+    refupdaters.resize(n);
+    needs_ring.resize(n);
   }
   encoders[typ] = enc;
   decoders[typ] = dec;
@@ -571,6 +575,19 @@ void ref_list(LinTree &lintree, int by) {
   for (int i = 0; i < n; i++) {
     updateref(lintree, by);
   }
+}
+
+void dump_string(string str) {
+  printf("%d: ", (int)str.size());
+  for (int i=0; i<str.size(); i++) {
+    char ch = str[i];
+    if (ch < ' ' || ch >= 0x7f)
+      printf("#%02x", (int) ch & 0xff);
+    else
+      printf("%c", ch);
+  }
+  printf("\n");
+  fflush(stdout);
 }
 
 std::string to_string(leftv val) {

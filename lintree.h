@@ -43,6 +43,7 @@ public:
   T get() {
     T result;
     memcpy(&result, memory.c_str() + cursor, sizeof(T));
+    cursor += sizeof(T);
     return result;
   }
   template<typename T>
@@ -105,6 +106,8 @@ public:
 
 std::string to_string(leftv val);
 leftv from_string(std::string &str);
+
+void init();
 
 };
 
