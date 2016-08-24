@@ -263,6 +263,12 @@ public:
     lock.unlock();
     return result;
   }
+  long count() {
+    lock.lock();
+    long result = q.size();
+    lock.unlock();
+    return result;
+  }
 };
 
 class SyncVar : public SharedObject {
@@ -291,6 +297,12 @@ public:
     while (!init)
       cond.wait();
     string result = value;
+    lock.unlock();
+    return result;
+  }
+  int check() {
+    lock.lock();
+    int result = init;
     lock.unlock();
     return result;
   }
@@ -787,6 +799,20 @@ BOOLEAN receiveChannel(leftv result, leftv arg) {
   return FALSE;
 }
 
+BOOLEAN statChannel(leftv result, leftv arg) {
+  if (wrong_num_args("statChannel", arg, 1))
+    return TRUE;
+  if (arg->Typ() != type_channel) {
+    WerrorS("statChannel: argument is not a channel");
+    return TRUE;
+  }
+  Channel *channel = *(Channel **)arg->Data();
+  long n = channel->count();
+  result->rtyp = INT_CMD;
+  result->data = (char *)n;
+  return FALSE;
+}
+
 BOOLEAN writeSyncVar(leftv result, leftv arg) {
   if (wrong_num_args("writeSyncVar", arg, 2))
     return TRUE;
@@ -815,6 +841,20 @@ BOOLEAN readSyncVar(leftv result, leftv arg) {
   leftv val = LinTree::from_string(item);
   result->rtyp = val->Typ();
   result->data = val->Data();
+  return FALSE;
+}
+
+BOOLEAN statSyncVar(leftv result, leftv arg) {
+  if (wrong_num_args("statSyncVar", arg, 1))
+    return TRUE;
+  if (arg->Typ() != type_syncvar) {
+    WerrorS("statSyncVar: argument is not a syncvar");
+    return TRUE;
+  }
+  SyncVar *syncvar = *(SyncVar **)arg->Data();
+  int init = syncvar->check();
+  result->rtyp = INT_CMD;
+  result->data = (char *)(long) init;
   return FALSE;
 }
 
@@ -867,8 +907,10 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "unlockRegion", FALSE, unlockRegion);
   fn->iiAddCproc(libname, "sendChannel", FALSE, sendChannel);
   fn->iiAddCproc(libname, "receiveChannel", FALSE, receiveChannel);
+  fn->iiAddCproc(libname, "statChannel", FALSE, statChannel);
   fn->iiAddCproc(libname, "writeSyncVar", FALSE, writeSyncVar);
   fn->iiAddCproc(libname, "readSyncVar", FALSE, readSyncVar);
+  fn->iiAddCproc(libname, "statSyncVar", FALSE, statSyncVar);
 
   fn->iiAddCproc(libname, "makeAtomicTable", FALSE, makeAtomicTable);
   fn->iiAddCproc(libname, "makeAtomicList", FALSE, makeAtomicList);
