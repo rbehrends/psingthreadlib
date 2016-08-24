@@ -11,11 +11,14 @@ private:
   Lock lock;
   long refcount;
   int type;
+  std::string name;
 public:
   SharedObject(): lock(), refcount(0) { }
   virtual ~SharedObject() { }
   void set_type(int type_init) { type = type_init; }
   int get_type() { return type; }
+  void set_name(std::string &name_init) { name = name_init; }
+  std::string &get_name() { return name; }
   void incref() {
     lock.lock();
     refcount++;
@@ -27,6 +30,9 @@ public:
     result = --refcount;
     lock.unlock();
     return result;
+  }
+  long getref() {
+    return refcount;
   }
 };
 

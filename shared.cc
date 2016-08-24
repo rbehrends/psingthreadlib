@@ -6,18 +6,88 @@
 #include "Singular/lists.h"
 #include "Singular/blackbox.h"
 #include <cstring>
+#include <string>
 #include <errno.h>
+#include <stdio.h>
 #include <vector>
 #include <map>
 #include <iterator>
 #include <queue>
 #include "thread.h"
-#include "shared.h"
 #include "lintree.h"
 
 using namespace std;
 
 namespace { // putting the implementation inside an anonymous namespace
+
+class SharedObject {
+private:
+  Lock lock;
+  long refcount;
+  int type;
+  std::string name;
+public:
+  SharedObject(): lock(), refcount(0) { }
+  virtual ~SharedObject() { }
+  void set_type(int type_init) { type = type_init; }
+  int get_type() { return type; }
+  void set_name(std::string &name_init) { name = name_init; }
+  std::string &get_name() { return name; }
+  void incref() {
+    lock.lock();
+    refcount++;
+    lock.unlock();
+  }
+  long decref() {
+    int result;
+    lock.lock();
+    result = --refcount;
+    lock.unlock();
+    return result;
+  }
+  long getref() {
+    return refcount;
+  }
+  virtual BOOLEAN op2(int op, leftv res, leftv a1, leftv a2) {
+    return TRUE;
+  }
+  virtual BOOLEAN op3(int op, leftv res, leftv a1, leftv a2, leftv a3) {
+    return TRUE;
+  }
+};
+
+void acquireShared(SharedObject *obj) {
+  obj->incref();
+}
+
+void releaseShared(SharedObject *obj) {
+  if (obj->decref() == 0) {
+    delete obj;
+  }
+}
+
+typedef std::map<std::string, SharedObject *> SharedObjectTable;
+
+class Region : public SharedObject {
+private:
+  Lock region_lock;
+public:
+  SharedObjectTable objects;
+  Region() : SharedObject(), region_lock(), objects() { }
+  virtual ~Region() { }
+  Lock *get_lock() { return &region_lock; }
+  void lock() {
+    if (!region_lock.is_locked())
+      region_lock.lock();
+  }
+  void unlock() {
+    if (region_lock.is_locked())
+      region_lock.unlock();
+  }
+  int is_locked() {
+    return region_lock.is_locked();
+  }
+};
 
 Lock global_objects_lock;
 SharedObjectTable global_objects;
@@ -48,6 +118,7 @@ SharedObject *makeSharedObject(SharedObjectTable &table,
   } else {
     result = scons();
     result->set_type(type);
+    result->set_name(name);
     table.insert(make_pair<string,SharedObject *>(name, result));
   }
   if (!was_locked)
@@ -262,6 +333,7 @@ BOOLEAN shared_assign(leftv l, leftv r) {
       {
 	return TRUE; // out of array bounds or similiar
       }
+      shared_destroy(NULL, ll->data);
       omFree(ll->data);
       ll->data = shared_copy(NULL,r->Data());
     }
@@ -285,12 +357,23 @@ BOOLEAN shared_check_assign(blackbox *b, leftv l, leftv r) {
   return FALSE;
 }
 
+BOOLEAN shared_op2(int op, leftv res, leftv a1, leftv a2) {
+  SharedObject *obj = *(SharedObject **)a1->Data();
+  return obj->op2(op, res, a1, a2);
+}
+
+BOOLEAN shared_op3(int op, leftv res, leftv a1, leftv a2, leftv a3) {
+  SharedObject *obj = *(SharedObject **)a1->Data();
+  return obj->op3(op, res, a1, a2, a3);
+}
+
 char *shared_string(blackbox *b, void *d) {
-  char buf[32];
+  char buf[80];
   SharedObject *obj = *(SharedObject **)d;
   if (!obj)
     return omStrDup("<uninitialized shared object>");
   int type = obj->get_type();
+  string &name = obj->get_name();
   const char *type_name = "unknown";
   if (type == type_channel)
     type_name = "channel";
@@ -306,7 +389,7 @@ char *shared_string(blackbox *b, void *d) {
     type_name = "syncvar";
   else if (type == type_region)
     type_name = "region";
-  sprintf(buf, "<%s %p>", type_name, (void *)obj);
+  sprintf(buf, "<%s \"%.40s\">", type_name, name.c_str());
   return omStrDup(buf);
 }
 
@@ -549,6 +632,88 @@ BOOLEAN putTable(leftv result, leftv arg) {
   return FALSE;
 }
 
+BOOLEAN getList(leftv result, leftv arg) {
+  if (wrong_num_args("getList", arg, 2))
+    return TRUE;
+  if (arg->Typ() != type_atomic_list && arg->Typ() != type_shared_list) {
+    WerrorS("getList: not a valid list (atomic or shared)");
+    return TRUE;
+  }
+  if (arg->next->Typ() != INT_CMD) {
+    WerrorS("getList: index must be an integer");
+    return TRUE;
+  }
+  TxList *list = *(TxList **) arg->Data();
+  long index = (long)(arg->next->Data());
+  string value;
+  int success = list->get(index, value);
+  if (success < 0) {
+    WerrorS("getList: region not acquired");
+    return TRUE;
+  }
+  if (success == 0) {
+    WerrorS("getList: no value at position");
+    return TRUE;
+  }
+  leftv tmp = LinTree::from_string(value);
+  result->rtyp = tmp->Typ();
+  result->data = tmp->Data();
+  return FALSE;
+}
+
+BOOLEAN putList(leftv result, leftv arg) {
+  if (wrong_num_args("putList", arg, 3))
+    return TRUE;
+  if (arg->Typ() != type_atomic_list && arg->Typ() != type_shared_list) {
+    WerrorS("putList: not a valid list (shared or atomic)");
+    return TRUE;
+  }
+  if (arg->next->Typ() != INT_CMD) {
+    WerrorS("putList: index must be an integer");
+    return TRUE;
+  }
+  TxList *list = *(TxList **) arg->Data();
+  long index = (long)(arg->next->Data());
+  string value = LinTree::to_string(arg->next->next);
+  int success = list->put(index, value);
+  if (success < 0) {
+    WerrorS("putList: region not acquired");
+    return TRUE;
+  }
+  result->rtyp = NONE;
+  return FALSE;
+}
+
+BOOLEAN lockRegion(leftv result, leftv arg) {
+  if (wrong_num_args("lockRegion", arg, 1))
+    return TRUE;
+  if (not_a_region("lockRegion", arg))
+    return TRUE;
+  Region *region = *(Region **)arg->Data();
+  if (region->is_locked()) {
+    WerrorS("lockRegion: region is already locked");
+    return TRUE;
+  }
+  region->lock();
+  result->rtyp = NONE;
+  return FALSE;
+}
+
+BOOLEAN unlockRegion(leftv result, leftv arg) {
+  if (wrong_num_args("unlockRegion", arg, 1))
+    return TRUE;
+  if (not_a_region("unlockRegion", arg))
+    return TRUE;
+  Region *region = *(Region **)arg->Data();
+  if (!region->is_locked()) {
+    WerrorS("unlockRegion: region is not locked");
+    return TRUE;
+  }
+  region->unlock();
+  result->rtyp = NONE;
+  return FALSE;
+}
+
 void makeSharedType(int &type, const char *name) {
   blackbox *b=(blackbox*)omAlloc0(sizeof(blackbox));
   b->blackbox_Init = shared_init;
@@ -557,6 +722,8 @@ void makeSharedType(int &type, const char *name) {
   b->blackbox_String = shared_string;
   b->blackbox_Assign = shared_assign;
   b->blackbox_CheckAssign = shared_check_assign;
+  // b->blackbox_Op2 = shared_op2;
+  // b->blackbox_Op3 = shared_op3;
   type = setBlackboxStuff(b, name);
 }
 
@@ -579,6 +746,11 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "putTable", FALSE, putTable);
   fn->iiAddCproc(libname, "getTable", FALSE, getTable);
   fn->iiAddCproc(libname, "inTable", FALSE, inTable);
+  fn->iiAddCproc(libname, "putList", FALSE, putList);
+  fn->iiAddCproc(libname, "getList", FALSE, getList);
+  fn->iiAddCproc(libname, "lockRegion", FALSE, lockRegion);
+  fn->iiAddCproc(libname, "unlockRegion", FALSE, unlockRegion);
+
   fn->iiAddCproc(libname, "makeAtomicTable", FALSE, makeAtomicTable);
   fn->iiAddCproc(libname, "makeAtomicList", FALSE, makeAtomicList);
   fn->iiAddCproc(libname, "makeSharedTable", FALSE, makeSharedTable);
