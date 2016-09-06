@@ -570,7 +570,7 @@ void encode_list(LinTree &lintree, leftv val) {
   lists l = (lists) val->Data();
   int n = lSize(l);
   lintree.put_int(n);
-  for (int i=0; i<n; i++) {
+  for (int i=0; i<=n; i++) {
     encode(lintree, &l->m[i]);
   }
 }
@@ -578,8 +578,8 @@ void encode_list(LinTree &lintree, leftv val) {
 leftv decode_list(LinTree &lintree) {
   int n = lintree.get_int();
   lists l = (lists)omAlloc(sizeof(*l));
-  l->Init(n);
-  for (int i=0; i<n; i++) {
+  l->Init(n+1);
+  for (int i=0; i<=n; i++) {
     leftv val = decode(lintree);
     memcpy(&l->m[i], val, sizeof(*val));
     omFreeBin(val, sleftv_bin);

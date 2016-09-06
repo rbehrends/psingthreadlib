@@ -7,8 +7,8 @@ use cc cc-shared
 source autoutil.tcl
 
 options {
-  singular:./Singular => "path to singular directory"
-  location:local => {
+  singular:.. => "path to singular directory"
+  location:system => {
       If and where to install the Singular thread bindings.
 
       local  - do not install them.
@@ -17,7 +17,7 @@ options {
   }
 }
 
-set SINGULAR [opt-val singular ./Singular]
+set SINGULAR [opt-val singular ..]
 
 if {![file isdirectory $SINGULAR]} {
   user-error "Singular path is not a directory"

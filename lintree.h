@@ -18,6 +18,9 @@ extern std::vector<LinTreeEncodeFunc> encoders;
 extern std::vector<LinTreeDecodeFunc> decoders;
 extern std::vector<LinTreeRefFunc> refupdaters;
 
+void install(int typ, LinTreeEncodeFunc enc, LinTreeDecodeFunc dec,
+  LinTreeRefFunc ref);
+
 class LinTree {
 private:
   std::string memory;
@@ -44,6 +47,12 @@ public:
     T result;
     memcpy(&result, memory.c_str() + cursor, sizeof(T));
     cursor += sizeof(T);
+    return result;
+  }
+  template<typename T>
+  T get_prev() {
+    T result;
+    memcpy(&result, memory.c_str() + cursor - sizeof(T), sizeof(T));
     return result;
   }
   template<typename T>

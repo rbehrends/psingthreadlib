@@ -858,6 +858,36 @@ BOOLEAN statSyncVar(leftv result, leftv arg) {
   return FALSE;
 }
 
+void encode_shared(LinTree::LinTree &lintree, leftv val) {
+  SharedObject *obj = (SharedObject *)(val->data);
+  lintree.put(obj);
+}
+
+leftv decode_shared(LinTree::LinTree &lintree) {
+  int type = lintree.get_prev<int>();
+  SharedObject *obj = lintree.get<SharedObject *>();
+  leftv result = (leftv) omAlloc0(sizeof(sleftv));
+  result->rtyp = type;
+  result->data = (void *)new_shared(obj);
+  return result;
+}
+
+void ref_shared(LinTree::LinTree &lintree, int by) {
+  SharedObject *obj = lintree.get<SharedObject *>();
+  while (by > 0) {
+    obj->incref();
+    by--;
+  }
+  while (by < 0) {
+    obj->decref();
+    by++;
+  }
+}
+
+void installShared(int type) {
+  LinTree::install(type, encode_shared, decode_shared, ref_shared);
+}
+
 void makeSharedType(int &type, const char *name) {
   blackbox *b=(blackbox*)omAlloc0(sizeof(blackbox));
   b->blackbox_Init = shared_init;
@@ -869,6 +899,7 @@ void makeSharedType(int &type, const char *name) {
   // b->blackbox_Op2 = shared_op2;
   // b->blackbox_Op3 = shared_op3;
   type = setBlackboxStuff(b, name);
+  installShared(type);
 }
 
 void makeRegionlockType(int &type, const char *name) {
@@ -880,6 +911,7 @@ void makeRegionlockType(int &type, const char *name) {
   b->blackbox_Assign = rlock_assign;
   b->blackbox_CheckAssign = shared_check_assign;
   type = setBlackboxStuff(b, name);
+  installShared(type);
 }
 
 }
