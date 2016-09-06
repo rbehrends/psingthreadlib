@@ -341,7 +341,6 @@ void encode_ideal(LinTree &lintree, leftv val) {
   void encode_ring(LinTree &lintree, const ring r);
   int typ = val->Typ();
   void *data = val->Data();
-  encode_ring(lintree, currRing);
   switch (typ) {
     case IDEAL_CMD:
     case MATRIX_CMD:
@@ -354,6 +353,17 @@ void encode_ideal(LinTree &lintree, leftv val) {
       break;
   }
   encode_ideal(lintree, typ, (ideal) data);
+}
+
+leftv decode_ideal(LinTree &lintree) {
+  ideal I = decode_ideal(lintree, IDEAL_CMD, (ring) lintree.get_last_ring());
+  return new_leftv(IDEAL_CMD, I);
+}
+
+void ref_ideal(LinTree &lintree, int by) {
+  int n = lintree.get_int();
+  for (int i=0; i<n; i++)
+    ref_poly(lintree, by);
 }
 
 
@@ -627,6 +637,8 @@ void init() {
   install(RING_CMD, encode_ring, decode_ring, ref_ring);
   install(POLY_CMD, encode_poly, decode_poly, ref_poly);
   set_needs_ring(POLY_CMD);
+  install(IDEAL_CMD, encode_ideal, decode_ideal, ref_ideal);
+  set_needs_ring(IDEAL_CMD);
 }
 
 LinTree::LinTree() : cursor(0), memory(), error(NULL), last_ring(NULL) {
