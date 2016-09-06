@@ -111,14 +111,14 @@ void updateref(LinTree &lintree, int by) {
 }
 
 leftv new_leftv(int code, void *data) {
-  leftv result = (leftv) omAlloc0(sizeof(sleftv));
+  leftv result = (leftv) omAlloc0Bin(sleftv_bin);
   result->rtyp = code;
   result->data = (char *)data;
   return result;
 }
 
 leftv new_leftv(int code, long data) {
-  leftv result = (leftv) omAlloc0(sizeof(sleftv));
+  leftv result = (leftv) omAlloc0Bin(sleftv_bin);
   result->rtyp = code;
   result->data = (char *)data;
   return result;

@@ -859,14 +859,15 @@ BOOLEAN statSyncVar(leftv result, leftv arg) {
 }
 
 void encode_shared(LinTree::LinTree &lintree, leftv val) {
-  SharedObject *obj = (SharedObject *)(val->data);
+  SharedObject *obj = *(SharedObject **)(val->Data());
+  acquireShared(obj);
   lintree.put(obj);
 }
 
 leftv decode_shared(LinTree::LinTree &lintree) {
   int type = lintree.get_prev<int>();
   SharedObject *obj = lintree.get<SharedObject *>();
-  leftv result = (leftv) omAlloc0(sizeof(sleftv));
+  leftv result = (leftv) omAlloc0Bin(sleftv_bin);
   result->rtyp = type;
   result->data = (void *)new_shared(obj);
   return result;
