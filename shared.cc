@@ -126,6 +126,21 @@ SharedObject *makeSharedObject(SharedObjectTable &table,
   return result;
 }
 
+SharedObject *findSharedObject(SharedObjectTable &table,
+  Lock *lock, string &name)
+{
+  int was_locked = lock->is_locked();
+  SharedObject *result = NULL;
+  if (!was_locked)
+    lock->lock();
+  if (table.count(name)) {
+    result = table[name];
+  }
+  if (!was_locked)
+    lock->unlock();
+  return result;
+}
+
 class Transactional: public SharedObject {
 private:
   Region *region;
@@ -613,6 +628,36 @@ BOOLEAN makeRegion(leftv result, leftv arg) {
   return FALSE;
 }
 
+BOOLEAN findSharedObject(leftv result, leftv arg) {
+  if (wrong_num_args("findSharedObject", arg, 1))
+    return TRUE;
+  if (not_a_uri("findSharedObject", arg))
+    return TRUE;
+  string uri = str(arg);
+  SharedObject *obj = findSharedObject(global_objects,
+    &global_objects_lock, uri);
+  result->rtyp = INT_CMD;
+  result->data = (char *)(long)(obj != NULL);
+  return FALSE;
+}
+
+BOOLEAN bindSharedObject(leftv result, leftv arg) {
+  if (wrong_num_args("bindSharedObject", arg, 1))
+    return TRUE;
+  if (not_a_uri("bindSharedObject", arg))
+    return TRUE;
+  string uri = str(arg);
+  SharedObject *obj = findSharedObject(global_objects,
+    &global_objects_lock, uri);
+  if (!obj) {
+    WerrorS("bindSharedObject: cannot find object");
+    return TRUE;
+  }
+  result->rtyp = obj->get_type();
+  result->data = new_shared(obj);
+  return FALSE;
+}
+
 BOOLEAN getTable(leftv result, leftv arg) {
   if (wrong_num_args("getTable", arg, 2))
     return TRUE;
@@ -952,6 +997,8 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "makeChannel", FALSE, makeChannel);
   fn->iiAddCproc(libname, "makeSyncVar", FALSE, makeSyncVar);
   fn->iiAddCproc(libname, "makeRegion", FALSE, makeRegion);
+  fn->iiAddCproc(libname, "findSharedObject", FALSE, findSharedObject);
+  fn->iiAddCproc(libname, "bindSharedObject", FALSE, bindSharedObject);
 
   LinTree::init();
 
