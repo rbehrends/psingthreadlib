@@ -136,7 +136,7 @@ automatically unlock when it goes out of scope.
 Example:
 
         proc testGlobals(region r, string key) {
-          regionlock lk = lockRegion(r);
+          regionlock lk = regionLock(r);
           shared_table globals = makeSharedTable(r, "globals");
           return(inTable(globals, key));
         }

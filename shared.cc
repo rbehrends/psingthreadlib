@@ -177,7 +177,7 @@ public:
 
 class TxTable: public Transactional {
 private:
-  map<string, string> entries;
+  std::map<string, string> entries;
 public:
   TxTable() : Transactional(), entries() { }
   virtual ~TxTable() { }
@@ -829,10 +829,26 @@ BOOLEAN lockRegion(leftv result, leftv arg) {
     return TRUE;
   }
   region->lock();
+  result->rtyp = NONE;
+  return FALSE;
+}
+
+BOOLEAN regionLock(leftv result, leftv arg) {
+  if (wrong_num_args("lockRegion", arg, 1))
+    return TRUE;
+  if (not_a_region("lockRegion", arg))
+    return TRUE;
+  Region *region = *(Region **)arg->Data();
+  if (region->is_locked()) {
+    WerrorS("lockRegion: region is already locked");
+    return TRUE;
+  }
+  region->lock();
   result->rtyp = type_regionlock;
   result->data = new_shared(region);
   return FALSE;
 }
+
 
 BOOLEAN unlockRegion(leftv result, leftv arg) {
   if (wrong_num_args("unlockRegion", arg, 1))
@@ -1015,6 +1031,7 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "putList", FALSE, putList);
   fn->iiAddCproc(libname, "getList", FALSE, getList);
   fn->iiAddCproc(libname, "lockRegion", FALSE, lockRegion);
+  fn->iiAddCproc(libname, "regionLock", FALSE, regionLock);
   fn->iiAddCproc(libname, "unlockRegion", FALSE, unlockRegion);
   fn->iiAddCproc(libname, "sendChannel", FALSE, sendChannel);
   fn->iiAddCproc(libname, "receiveChannel", FALSE, receiveChannel);

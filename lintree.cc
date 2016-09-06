@@ -152,7 +152,7 @@ void encode_string(LinTree &lintree, leftv val) {
 leftv decode_string(LinTree &lintree) {
   size_t len = lintree.get<size_t>();
   const char *p = lintree.get_bytes(len);
-  leftv result = new_leftv(STRING_CMD, NULL);
+  leftv result = new_leftv(STRING_CMD, (void *)NULL);
   result->data = omAlloc0(len+1);
   memcpy(result->data, p, len);
   return result;
