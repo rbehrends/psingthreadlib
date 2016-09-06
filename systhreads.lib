@@ -1,1 +1,50 @@
-LIB "systhreads.so";
+version="version systhreads.lib 0.1.0.0 Aug_2016";
+category="General purpose";
+info="
+LIBRARY: systhreads.lib Primitives for Singular's multi-threaded objects
+AUTHOR: Reimer Behrends
+
+OVERVIEW:
+This library implements basic functionality for shared objects in a
+multi-threaded system, such as channels, shared tables & lists, and
+synchronization variables.
+
+KEYWORDS: parallel computing
+";
+
+proc mod_init() {
+  LIB "systhreads.so";
+}
+
+proc bindTypedSharedObject(string name, string needed_type) {
+  string actual_type = typeSharedObject(name);
+  if (actual_type == needed_type) {
+    return(bindSharedObject(name));
+  } else { if (actual_type == "undefined") {
+    ERROR("bindTypedSharedObject: object '" + name + "' does not exist");
+  } }
+  ERROR("bindTypedSharedObject: found " + actual_type +
+        ", needed " + needed_type);
+}
+
+proc bindChannel(string name) {
+  return(bindTypedSharedObject(name, "channel"));
+}
+
+proc bindAtomicTable(string name) {
+  return(bindTypedSharedObject(name, "atomic_table"));
+}
+
+proc bindAtomicList(string name) {
+  return(bindTypedSharedObject(name, "atomic_list"));
+}
+
+proc bindRegion(string name) {
+  return(bindTypedSharedObject(name, "region"));
+}
+
+proc bindSyncVar(string name) {
+  return(bindTypedSharedObject(name, "syncvar"));
+}
+
+// vim:filetype=singular

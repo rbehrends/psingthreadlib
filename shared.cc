@@ -451,6 +451,8 @@ char *shared_string(blackbox *b, void *d) {
     type_name = "syncvar";
   else if (type == type_region)
     type_name = "region";
+  else if (type == type_regionlock)
+    type_name = "regionlock";
   sprintf(buf, "<%s \"%.40s\">", type_name, name.c_str());
   return omStrDup(buf);
 }
@@ -638,6 +640,37 @@ BOOLEAN findSharedObject(leftv result, leftv arg) {
     &global_objects_lock, uri);
   result->rtyp = INT_CMD;
   result->data = (char *)(long)(obj != NULL);
+  return FALSE;
+}
+
+BOOLEAN typeSharedObject(leftv result, leftv arg) {
+  if (wrong_num_args("findSharedObject", arg, 1))
+    return TRUE;
+  if (not_a_uri("findSharedObject", arg))
+    return TRUE;
+  string uri = str(arg);
+  SharedObject *obj = findSharedObject(global_objects,
+    &global_objects_lock, uri);
+  int type = obj ? obj->get_type() : -1;
+  const char *type_name = "undefined";
+  if (type == type_channel)
+    type_name = "channel";
+  else if (type == type_atomic_table)
+    type_name = "atomic_table";
+  else if (type == type_shared_table)
+    type_name = "shared_table";
+  else if (type == type_atomic_list)
+    type_name = "atomic_list";
+  else if (type == type_shared_list)
+    type_name = "shared_list";
+  else if (type == type_syncvar)
+    type_name = "syncvar";
+  else if (type == type_region)
+    type_name = "region";
+  else if (type == type_regionlock)
+    type_name = "regionlock";
+  result->rtyp = STRING_CMD;
+  result->data = (char *)(omStrDup(type_name));
   return FALSE;
 }
 
@@ -999,6 +1032,7 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "makeRegion", FALSE, makeRegion);
   fn->iiAddCproc(libname, "findSharedObject", FALSE, findSharedObject);
   fn->iiAddCproc(libname, "bindSharedObject", FALSE, bindSharedObject);
+  fn->iiAddCproc(libname, "typeSharedObject", FALSE, typeSharedObject);
 
   LinTree::init();
 
