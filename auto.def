@@ -26,7 +26,7 @@ if {![file isdirectory $SINGULAR]} {
 set LOCATION_LIB {}
 set LOCATION_MOD {}
 
-switch -glob -- [opt-val location local] {
+switch -glob -- [opt-val location system] {
   local {}
   system {
     set LOCATION_LIB $SINGULAR/Singular/LIB
