@@ -119,7 +119,7 @@ SharedObject *makeSharedObject(SharedObjectTable &table,
     result = scons();
     result->set_type(type);
     result->set_name(name);
-    table.insert(make_pair<string,SharedObject *>(name, result));
+    table.insert(pair<string,SharedObject *>(name, result));
   }
   if (!was_locked)
     lock->unlock();
@@ -187,7 +187,7 @@ public:
     if (entries.count(key)) {
       entries[key] = value;
     } else {
-      entries.insert(make_pair<string, string>(key, value));
+      entries.insert(pair<string, string>(key, value));
       result = 1;
     }
     tx_end();
