@@ -1,4 +1,5 @@
 #include "lintree.h"
+#include <iostream>
 
 #define TRANSEXT_PRIVATES 1 /* allow access to transext internals */
 
@@ -604,6 +605,64 @@ void ref_list(LinTree &lintree, int by) {
   }
 }
 
+// COMMAND
+
+void encode_command(LinTree &lintree, leftv val) {
+  command cmd = (command) val->Data();
+  lintree.put_int(cmd->op);
+  lintree.put_int(cmd->argc);
+  if (cmd->argc >= 1)
+    encode(lintree, &cmd->arg1);
+  if (cmd->argc < 4) {
+    if (cmd->argc >= 2)
+      encode(lintree, &cmd->arg2);
+    if (cmd->argc >= 3)
+      encode(lintree, &cmd->arg3);
+  }
+}
+
+leftv decode_command(LinTree &lintree) {
+  command cmd = (command)omAlloc0(sizeof(*cmd));
+  int op = lintree.get_int();
+  int argc = lintree.get_int();
+  cmd->op = op;
+  cmd->argc = argc;
+  if (argc >= 1) {
+    leftv val = decode(lintree);
+    memcpy(&cmd->arg1, val, sizeof(*val));
+    omFreeBin(val, sleftv_bin);
+  }
+  if (argc < 4) {
+    if (argc >= 2) {
+      leftv val = decode(lintree);
+      memcpy(&cmd->arg2, val, sizeof(*val));
+      omFreeBin(val, sleftv_bin);
+    }
+    if (argc >= 3) {
+      leftv val = decode(lintree);
+      memcpy(&cmd->arg3, val, sizeof(*val));
+      omFreeBin(val, sleftv_bin);
+    }
+  }
+  leftv result = new_leftv(COMMAND, cmd);
+  int error = result->Eval();
+  if (error) {
+    lintree.mark_error("error in eval");
+  }
+  return result;
+}
+
+void ref_command(LinTree &lintree, int by) {
+  int op = lintree.get_int();
+  int argc = lintree.get_int();
+  if (argc >= 1)
+    updateref(lintree, by);
+  if (argc < 4) {
+    if (argc >= 2) updateref(lintree, by);
+    if (argc >= 3) updateref(lintree, by);
+  }
+}
+
 void dump_string(string str) {
   printf("%d: ", (int)str.size());
   for (int i=0; i<str.size(); i++) {
@@ -632,6 +691,7 @@ void init() {
   install(INT_CMD, encode_int, decode_int, ref_int);
   install(LIST_CMD, encode_list, decode_list, ref_list);
   install(STRING_CMD, encode_string, decode_string, ref_string);
+  install(COMMAND, encode_command, decode_command, ref_command);
   install(NUMBER_CMD, encode_number, decode_number, ref_number);
   set_needs_ring(NUMBER_CMD);
   install(RING_CMD, encode_ring, decode_ring, ref_ring);
