@@ -5,6 +5,8 @@
 #include "Singular/links/silink.h"
 #include "Singular/lists.h"
 #include "Singular/blackbox.h"
+#include "Singular/feOpt.h"
+#include "Singular/libsingular.h"
 #include <cstring>
 #include <string>
 #include <errno.h>
@@ -1039,6 +1041,19 @@ public:
 Lock thread_lock;
 
 ThreadState thread_state[MAX_THREADS];
+
+void setOption(int ch) {
+  int index = feGetOptIndex(ch);
+  feSetOptValue((feOptIndex) index, (int) 1);
+}
+
+char thread_arg0[] = "<Singular Thread>";
+
+void thread_init() {
+  siInit(thread_arg0);
+  setOption('q');
+  setOption('b');
+}
 
 void *thread_main(void *arg) {
   ThreadState *ts = (ThreadState *)arg;
