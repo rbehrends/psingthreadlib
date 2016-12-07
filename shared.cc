@@ -1126,17 +1126,13 @@ BOOLEAN joinThread(leftv result, leftv arg) {
   string eof("");
   ts->to_thread.push(eof);
   ts->to_cond.signal();
-  cout << 1 << endl;
   ts->lock.unlock();
-  cout << 2 << endl;
   pthread_join(ts->id, NULL);
   thread_lock.lock();
   ts->running = false;
   ts->active = false;
   thread->clearThreadState();
-  cout << 3 << endl;
   thread_lock.unlock();
-  cout << 4 << endl;
   result->rtyp = NONE;
   return FALSE;
 }
