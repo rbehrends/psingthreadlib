@@ -100,6 +100,7 @@ int type_atomic_table;
 int type_shared_table;
 int type_atomic_list;
 int type_shared_list;
+int type_thread;
 
 typedef SharedObject *SharedObjectPtr;
 typedef SharedObjectPtr (*SharedConstructor)();
@@ -453,6 +454,10 @@ char *shared_string(blackbox *b, void *d) {
     type_name = "region";
   else if (type == type_regionlock)
     type_name = "regionlock";
+  else if (type == type_thread) {
+    sprintf(buf, "<thread #%s>", name.c_str());
+    return omStrDup(buf);
+  }
   sprintf(buf, "<%s \"%.40s\">", type_name, name.c_str());
   return omStrDup(buf);
 }
@@ -1009,6 +1014,177 @@ void makeRegionlockType(int &type, const char *name) {
   installShared(type);
 }
 
+#define MAX_THREADS 128
+
+class ThreadState {
+public:
+  bool active;
+  bool running;
+  int index;
+  pthread_t id;
+  pthread_t parent;
+  Lock lock;
+  ConditionVariable cond;
+  queue<string> to_thread;
+  queue<string> from_thread;
+  ThreadState() : lock(), cond(&lock), to_thread(), from_thread() {
+    active = false;
+    running = false;
+    index = -1;
+  }
+};
+
+Lock thread_lock;
+
+ThreadState thread_state[MAX_THREADS];
+
+void *thread_main(void *arg) {
+  ThreadState *ts = (ThreadState *)arg;
+  ts->lock.lock();
+  for (;;) {
+    while (ts->to_thread.empty())
+      ts->cond.wait();
+    /* TODO */
+
+  }
+  ts->lock.unlock();
+}
+
+class SingularThread : public SharedObject {
+private:
+  ThreadState *ts;
+public:
+  SingularThread(ThreadState *ts_init) : SharedObject(), ts(ts_init) { }
+  virtual ~SingularThread() { }
+  ThreadState *getThreadState() { return ts; }
+  void clearThreadState() {
+    ts = NULL;
+  }
+};
+
+BOOLEAN createThread(leftv result, leftv arg) {
+  int i;
+  BOOLEAN rcode = FALSE;
+  if (wrong_num_args("createThread", arg, 0))
+    return TRUE;
+  thread_lock.lock();
+  for (i=0; i<MAX_THREADS; i++) {
+    if (!thread_state[i].active) {
+      ThreadState *ts = thread_state + i;
+      SingularThread *thread = new SingularThread(ts);
+      char buf[10];
+      sprintf(buf, "%d", i);
+      string name(buf);
+      thread->set_name(name);
+      ts->index = i;
+      if (pthread_create(&ts->id, NULL, thread_main, ts)<0) {
+        rcode = TRUE;
+	WerrorS("createThread: internal error: failed to create thread");
+	goto exit;
+      }
+      ts->parent = pthread_self();
+      ts->active = true;
+      ts->running = true;
+      queue<string> q0, q1; // clear queues
+      ts->to_thread.swap(q0);
+      ts->from_thread.swap(q0);
+      result->rtyp = type_thread;
+      result->data = new_shared(thread);
+      goto exit;
+    }
+  }
+  WerrorS("createThread: too many threads");
+  rcode = TRUE;
+  exit:
+  thread_lock.unlock();
+  return rcode;
+}
+
+BOOLEAN joinThread(leftv result, leftv arg) {
+  if (wrong_num_args("joinThread", arg, 1))
+    return TRUE;
+  if (arg->Typ() != type_thread) {
+    WerrorS("joinThread: argument is not a thread");
+    return TRUE;
+  }
+  SingularThread *thread = *(SingularThread **)arg->Data();
+  ThreadState *ts = thread->getThreadState();
+  if (ts && ts->parent != pthread_self()) {
+    WerrorS("joinThread: can only be called from parent thread");
+    return TRUE;
+  }
+  ts->lock.lock();
+  string eof("");
+  ts->to_thread.push(eof);
+  ts->cond.signal();
+  ts->lock.unlock();
+  pthread_join(ts->id, NULL);
+  thread_lock.lock();
+  ts->running = false;
+  ts->active = false;
+  thread_lock.unlock();
+  result->rtyp = NONE;
+  return FALSE;
+}
+
+BOOLEAN threadEval(leftv result, leftv arg) {
+  if (wrong_num_args("threadEval", arg, 2))
+    return TRUE;
+  if (arg->Typ() != type_thread) {
+    WerrorS("threadEval: argument is not a thread");
+    return TRUE;
+  }
+  SingularThread *thread = *(SingularThread **)arg->Data();
+  string expr = LinTree::to_string(arg->next);
+  ThreadState *ts = thread->getThreadState();
+  if (ts && ts->parent != pthread_self()) {
+    WerrorS("threadEval: can only be called from parent thread");
+    return TRUE;
+  }
+  if (ts) ts->lock.lock();
+  if (!ts || !ts->running || !ts->active) {
+    WerrorS("threadEval: thread is no longer running");
+    if (ts) ts->lock.unlock();
+    return TRUE;
+  }
+  ts->to_thread.push(expr);
+  ts->cond.signal();
+  ts->lock.unlock();
+  result->rtyp = NONE;
+  return FALSE;
+}
+
+BOOLEAN threadResult(leftv result, leftv arg) {
+  if (wrong_num_args("threadResult", arg, 1))
+    return TRUE;
+  if (arg->Typ() != type_thread) {
+    WerrorS("threadResult: argument is not a thread");
+    return TRUE;
+  }
+  SingularThread *thread = *(SingularThread **)arg->Data();
+  ThreadState *ts = thread->getThreadState();
+  if (ts && ts->parent != pthread_self()) {
+    WerrorS("threadResult: can only be called from parent thread");
+    return TRUE;
+  }
+  if (ts) ts->lock.lock();
+  if (!ts || !ts->running || !ts->active) {
+    WerrorS("threadResult: thread is no longer running");
+    if (ts) ts->lock.unlock();
+    return TRUE;
+  }
+  while (ts->from_thread.empty()) {
+    ts->cond.wait();
+  }
+  string expr = ts->from_thread.front();
+  ts->from_thread.pop();
+  ts->lock.unlock();
+  leftv val = LinTree::from_string(expr);
+  result->rtyp = val->Typ();
+  result->data = val->Data();
+  return FALSE;
+}
+
 }
 
 
@@ -1050,6 +1226,11 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "findSharedObject", FALSE, findSharedObject);
   fn->iiAddCproc(libname, "bindSharedObject", FALSE, bindSharedObject);
   fn->iiAddCproc(libname, "typeSharedObject", FALSE, typeSharedObject);
+
+  fn->iiAddCproc(libname, "createThread", FALSE, createThread);
+  fn->iiAddCproc(libname, "joinThread", FALSE, joinThread);
+  fn->iiAddCproc(libname, "threadEval", FALSE, threadEval);
+  fn->iiAddCproc(libname, "threadResult", FALSE, threadResult);
 
   LinTree::init();
 
