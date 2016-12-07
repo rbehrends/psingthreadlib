@@ -20,6 +20,10 @@ private:
   friend class ConditionVariable;
   Thread owner;
   int locked;
+  void set_owner() {
+    owner = pthread_self();
+    locked = 1;
+  }
 public:
   Lock() {
     pthread_mutex_init(&mutex, NULL);
@@ -48,6 +52,7 @@ public:
 };
 
 class ConditionVariable {
+  friend class Lock;
 private:
   pthread_cond_t condition;
   Lock *lock;
@@ -65,6 +70,7 @@ public:
     if (!lock->is_locked())
       ThreadError("waited on condition without locked mutex");
     pthread_cond_wait(&condition, &lock->mutex);
+    lock->set_owner();
   }
   void signal() {
     if (!lock->is_locked())

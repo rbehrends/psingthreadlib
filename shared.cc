@@ -1024,10 +1024,12 @@ public:
   pthread_t id;
   pthread_t parent;
   Lock lock;
-  ConditionVariable cond;
+  ConditionVariable to_cond;
+  ConditionVariable from_cond;
   queue<string> to_thread;
   queue<string> from_thread;
-  ThreadState() : lock(), cond(&lock), to_thread(), from_thread() {
+  ThreadState() : lock(), to_cond(&lock), from_cond(&lock),
+                  to_thread(), from_thread() {
     active = false;
     running = false;
     index = -1;
@@ -1043,9 +1045,16 @@ void *thread_main(void *arg) {
   ts->lock.lock();
   for (;;) {
     while (ts->to_thread.empty())
-      ts->cond.wait();
+      ts->to_cond.wait();
     /* TODO */
-
+    string expr = ts->to_thread.front();
+    ts->to_thread.pop();
+    if (expr.size() == 0) {
+      ts->lock.unlock();
+      return NULL;
+    }
+    ts->from_thread.push(expr);
+    ts->from_cond.signal();
   }
   ts->lock.unlock();
 }
@@ -1116,13 +1125,18 @@ BOOLEAN joinThread(leftv result, leftv arg) {
   ts->lock.lock();
   string eof("");
   ts->to_thread.push(eof);
-  ts->cond.signal();
+  ts->to_cond.signal();
+  cout << 1 << endl;
   ts->lock.unlock();
+  cout << 2 << endl;
   pthread_join(ts->id, NULL);
   thread_lock.lock();
   ts->running = false;
   ts->active = false;
+  thread->clearThreadState();
+  cout << 3 << endl;
   thread_lock.unlock();
+  cout << 4 << endl;
   result->rtyp = NONE;
   return FALSE;
 }
@@ -1148,7 +1162,7 @@ BOOLEAN threadEval(leftv result, leftv arg) {
     return TRUE;
   }
   ts->to_thread.push(expr);
-  ts->cond.signal();
+  ts->to_cond.signal();
   ts->lock.unlock();
   result->rtyp = NONE;
   return FALSE;
@@ -1174,7 +1188,7 @@ BOOLEAN threadResult(leftv result, leftv arg) {
     return TRUE;
   }
   while (ts->from_thread.empty()) {
-    ts->cond.wait();
+    ts->from_cond.wait();
   }
   string expr = ts->from_thread.front();
   ts->from_thread.pop();
@@ -1199,6 +1213,7 @@ extern "C" int mod_init(SModulFunctions *fn)
   makeSharedType(type_channel, "channel");
   makeSharedType(type_syncvar, "syncvar");
   makeSharedType(type_region, "region");
+  makeSharedType(type_thread, "thread");
   makeRegionlockType(type_regionlock, "regionlock");
 
   fn->iiAddCproc(libname, "putTable", FALSE, putTable);
