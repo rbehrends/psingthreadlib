@@ -1109,9 +1109,8 @@ BOOLEAN createThread(leftv result, leftv arg) {
       ts->parent = pthread_self();
       ts->active = true;
       ts->running = true;
-      queue<string> q0, q1; // clear queues
-      ts->to_thread.swap(q0);
-      ts->from_thread.swap(q0);
+      ts->to_thread = queue<string>();
+      ts->from_thread = queue<string>();
       result->rtyp = type_thread;
       result->data = new_shared(thread);
       goto exit;
