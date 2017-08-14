@@ -19,6 +19,20 @@ The library can be used by loading it with:
 
         LIB "systhreads.lib";
 
+# Threads
+
+Threads can be created with `createThread()`. Once no longer in use,
+thread resources should be disposed of with `joinThread()`. It is
+possible to evaluate expressions in an interpreter with `threadEval()`
+and retrieve the result with `threadResult()`.
+
+Example:
+
+        thread t = createThread();
+        threadEval(t, quote("foo" + "bar"));
+        threadResult(t);
+        joinThread(t);
+
 # Shared objects
 
 This library primarily provides a number of types to share data
