@@ -472,13 +472,14 @@ ring decode_ring_raw(LinTree &lintree) {
   }
   int num_ord;
   num_ord = lintree.get_int();
-  int *ord = (int *)omAlloc0((num_ord + 1)*sizeof(int));
+  rRingOrder_t *ord =
+    (rRingOrder_t *)omAlloc0((num_ord + 1)*sizeof(rRingOrder_t));
   int *block0 = (int *)omAlloc0((num_ord + 1)*sizeof(int));
   int *block1 = (int *)omAlloc0((num_ord + 1)*sizeof(int));
   int **wvhdl = (int **)omAlloc0((num_ord + 1)*sizeof(int*));
   for (int i=0; i<num_ord; i++)
   {
-    ord[i] = lintree.get_int();
+    ord[i] = (rRingOrder_t) lintree.get_int();
     block0[i] = lintree.get_int();
     block1[i] = lintree.get_int();
     switch (ord[i]) {
