@@ -51,7 +51,7 @@ if {[string equal $LOCATION_LIB ""]} {
   set LOCATION_LIB [shell-quote $LOCATION_LIB]
   set LOCATION_MOD [shell-quote $LOCATION_MOD]
   define INSTALLATION "\ttools/install.sh -c -m 644 systhreads.lib $LOCATION_LIB
-\ttools/install.sh -c -m 644 systhreads.so $LOCATION_MOD
+\ttools/install.sh -c -m 644 systhreadsDyn.so $LOCATION_MOD
 "
 }
 set sing_includes {}

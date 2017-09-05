@@ -13,7 +13,7 @@ KEYWORDS: parallel computing
 ";
 
 proc mod_init() {
-  LIB "systhreads.so";
+  LIB "systhreadsDyn.so";
 }
 
 proc bindTypedSharedObject(string name, string needed_type) {

@@ -1,3 +1,4 @@
+#include <factory/prelude.h>
 #include <iostream>
 #include "kernel/mod2.h"
 #include "Singular/ipid.h"
@@ -20,7 +21,7 @@
 
 using namespace std;
 
-namespace { // putting the implementation inside an anonymous namespace
+namespace LibThread {
 
 class SharedObject {
 private:
@@ -991,6 +992,7 @@ void installShared(int type) {
 }
 
 void makeSharedType(int &type, const char *name) {
+  if (type != 0) return;
   blackbox *b=(blackbox*)omAlloc0(sizeof(blackbox));
   b->blackbox_Init = shared_init;
   b->blackbox_destroy = shared_destroy;
@@ -1005,6 +1007,7 @@ void makeSharedType(int &type, const char *name) {
 }
 
 void makeRegionlockType(int &type, const char *name) {
+  if (type != 0) return;
   blackbox *b=(blackbox*)omAlloc0(sizeof(blackbox));
   b->blackbox_Init = shared_init;
   b->blackbox_destroy = rlock_destroy;
@@ -1050,24 +1053,29 @@ void setOption(int ch) {
 char thread_arg0[] = "<Singular Thread>";
 
 void thread_init() {
+  onThreadInit();
   siInit(thread_arg0);
   setOption('q');
-  setOption('b');
+  // setOption('b');
 }
 
 void *thread_main(void *arg) {
   ThreadState *ts = (ThreadState *)arg;
+  thread_init();
   ts->lock.lock();
   for (;;) {
     while (ts->to_thread.empty())
       ts->to_cond.wait();
     /* TODO */
     string expr = ts->to_thread.front();
-    ts->to_thread.pop();
     if (expr.size() == 0) {
       ts->lock.unlock();
       return NULL;
     }
+    /* this will implicitly eval commands */
+    leftv val = LinTree::from_string(expr);
+    expr = LinTree::to_string(val);
+    ts->to_thread.pop();
     ts->from_thread.push(expr);
     ts->from_cond.signal();
   }
@@ -1210,6 +1218,8 @@ BOOLEAN threadResult(leftv result, leftv arg) {
 }
 
 }
+
+using namespace LibThread;
 
 
 extern "C" int mod_init(SModulFunctions *fn)

@@ -1,3 +1,4 @@
+#include <factory/prelude.h>
 #include "lintree.h"
 #include <iostream>
 
@@ -125,6 +126,19 @@ leftv new_leftv(int code, long data) {
   return result;
 }
 
+// NONE
+
+void encode_none(LinTree &lintree, leftv val) {
+}
+
+leftv decode_none(LinTree &lintree) {
+  return new_leftv(NONE, 0L);
+}
+
+void ref_none(LinTree &lintree, int by) {
+}
+
+
 // INT_CMD
 
 void encode_int(LinTree &lintree, leftv val) {
@@ -160,6 +174,35 @@ leftv decode_string(LinTree &lintree) {
 }
 
 void ref_string(LinTree &lintree, int by) {
+  size_t len = lintree.get<size_t>();
+  lintree.skip_bytes(len);
+}
+
+// DEF_CMD
+
+void encode_def(LinTree &lintree, leftv val) {
+  char *p = (char *)val->Name();
+  size_t len = strlen(p);
+  lintree.put(len);
+  lintree.put_bytes(p, len);
+}
+
+leftv decode_def(LinTree &lintree) {
+  size_t len = lintree.get<size_t>();
+  const char *p = lintree.get_bytes(len);
+  leftv result = new_leftv(DEF_CMD, (void *)NULL);
+  char *name = (char *) omAlloc0(len+1);
+  result->name = name;
+  result->rtyp = 0;
+  memcpy(name, p, len);
+  int error = result->Eval();
+  if (error) {
+    lintree.mark_error("error in name lookup");
+  }
+  return result;
+}
+
+void ref_def(LinTree &lintree, int by) {
   size_t len = lintree.get<size_t>();
   lintree.skip_bytes(len);
 }
@@ -677,22 +720,43 @@ void dump_string(string str) {
   fflush(stdout);
 }
 
+void encoding_error(const char* s) {
+  Werror("libthread encoding error: %s", s);
+}
+
+void decoding_error(const char* s) {
+  Werror("libthread decoding error: %s", s);
+}
+
+
 std::string to_string(leftv val) {
   LinTree lintree;
   encode(lintree, val);
+  if (lintree.has_error()) {
+    encoding_error(lintree.error_msg());
+    lintree.clear();
+    lintree.put_int(NONE);
+  }
   return lintree.to_string();
 }
 
 leftv from_string(std::string &str) {
   LinTree lintree(str);
-  return decode(lintree);
+  leftv result = decode(lintree);
+  if (lintree.has_error()) {
+    decoding_error(lintree.error_msg());
+    result = new_leftv(NONE, 0L);
+  }
+  return result;
 }
 
 void init() {
+  install(NONE, encode_none, decode_none, ref_none);
   install(INT_CMD, encode_int, decode_int, ref_int);
   install(LIST_CMD, encode_list, decode_list, ref_list);
   install(STRING_CMD, encode_string, decode_string, ref_string);
   install(COMMAND, encode_command, decode_command, ref_command);
+  install(DEF_CMD, encode_def, decode_def, ref_def);
   install(NUMBER_CMD, encode_number, decode_number, ref_number);
   set_needs_ring(NUMBER_CMD);
   install(RING_CMD, encode_ring, decode_ring, ref_ring);
