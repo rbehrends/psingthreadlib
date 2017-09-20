@@ -94,6 +94,9 @@ public:
 
 Lock global_objects_lock;
 SharedObjectTable global_objects;
+Lock master_lock;
+SIMPLE_THREAD_VAR long thread_id;
+long thread_counter;
 
 int type_region;
 int type_regionlock;
@@ -1053,6 +1056,9 @@ void setOption(int ch) {
 char thread_arg0[] = "<Singular Thread>";
 
 void thread_init() {
+  master_lock.lock();
+  thread_id = ++thread_counter;
+  master_lock.unlock();
   onThreadInit();
   siInit(thread_arg0);
   setOption('q');
@@ -1064,19 +1070,30 @@ void *thread_main(void *arg) {
   thread_init();
   ts->lock.lock();
   for (;;) {
+    bool eval = false;
     while (ts->to_thread.empty())
       ts->to_cond.wait();
     /* TODO */
     string expr = ts->to_thread.front();
-    if (expr.size() == 0) {
-      ts->lock.unlock();
-      return NULL;
+    switch (expr[0]) {
+      case '\0': case 'q':
+        ts->lock.unlock();
+	return NULL;
+      case 'x':
+        eval = false;
+	break;
+      case 'e':
+        eval = true;
+	break;
     }
+    ts->to_thread.pop();
+    expr = ts->to_thread.front();
     /* this will implicitly eval commands */
     leftv val = LinTree::from_string(expr);
     expr = LinTree::to_string(val);
     ts->to_thread.pop();
-    ts->from_thread.push(expr);
+    if (eval)
+      ts->from_thread.push(expr);
     ts->from_cond.signal();
   }
   ts->lock.unlock();
@@ -1145,8 +1162,8 @@ BOOLEAN joinThread(leftv result, leftv arg) {
     return TRUE;
   }
   ts->lock.lock();
-  string eof("");
-  ts->to_thread.push(eof);
+  string quit("q");
+  ts->to_thread.push(quit);
   ts->to_cond.signal();
   ts->lock.unlock();
   pthread_join(ts->id, NULL);
@@ -1156,6 +1173,24 @@ BOOLEAN joinThread(leftv result, leftv arg) {
   thread->clearThreadState();
   thread_lock.unlock();
   result->rtyp = NONE;
+  return FALSE;
+}
+
+BOOLEAN threadID(leftv result, leftv arg) {
+  int i;
+  if (wrong_num_args("threadID", arg, 0))
+    return TRUE;
+  result->rtyp = INT_CMD;
+  result->data = (char *)thread_id;
+  return FALSE;
+}
+
+BOOLEAN mainThread(leftv result, leftv arg) {
+  int i;
+  if (wrong_num_args("mainThread", arg, 0))
+    return TRUE;
+  result->rtyp = INT_CMD;
+  result->data = (char *)(long)(thread_id == 0L);
   return FALSE;
 }
 
@@ -1179,6 +1214,35 @@ BOOLEAN threadEval(leftv result, leftv arg) {
     if (ts) ts->lock.unlock();
     return TRUE;
   }
+  ts->to_thread.push("e");
+  ts->to_thread.push(expr);
+  ts->to_cond.signal();
+  ts->lock.unlock();
+  result->rtyp = NONE;
+  return FALSE;
+}
+
+BOOLEAN threadExec(leftv result, leftv arg) {
+  if (wrong_num_args("threadExec", arg, 2))
+    return TRUE;
+  if (arg->Typ() != type_thread) {
+    WerrorS("threadEval: argument is not a thread");
+    return TRUE;
+  }
+  SingularThread *thread = *(SingularThread **)arg->Data();
+  string expr = LinTree::to_string(arg->next);
+  ThreadState *ts = thread->getThreadState();
+  if (ts && ts->parent != pthread_self()) {
+    WerrorS("threadEval: can only be called from parent thread");
+    return TRUE;
+  }
+  if (ts) ts->lock.lock();
+  if (!ts || !ts->running || !ts->active) {
+    WerrorS("threadEval: thread is no longer running");
+    if (ts) ts->lock.unlock();
+    return TRUE;
+  }
+  ts->to_thread.push("x");
   ts->to_thread.push(expr);
   ts->to_cond.signal();
   ts->lock.unlock();
@@ -1264,7 +1328,10 @@ extern "C" int mod_init(SModulFunctions *fn)
 
   fn->iiAddCproc(libname, "createThread", FALSE, createThread);
   fn->iiAddCproc(libname, "joinThread", FALSE, joinThread);
+  fn->iiAddCproc(libname, "threadID", FALSE, threadID);
+  fn->iiAddCproc(libname, "mainThread", FALSE, mainThread);
   fn->iiAddCproc(libname, "threadEval", FALSE, threadEval);
+  fn->iiAddCproc(libname, "threadExec", FALSE, threadExec);
   fn->iiAddCproc(libname, "threadResult", FALSE, threadResult);
 
   LinTree::init();

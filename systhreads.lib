@@ -16,6 +16,18 @@ proc mod_init() {
   LIB "systhreadsDyn.so";
 }
 
+proc threadLoadLib(thread th, string libname) {
+  threadExec(th, quote(load(eval(libname), "with")));
+}
+
+proc threadExecFile(thread th, string file) {
+  threadExec(th, quote(read(eval(s))));
+}
+
+proc threadExecString(thread th, string s) {
+  threadExec(th, quote(execute(eval(s))));
+}
+
 proc bindTypedSharedObject(string name, string needed_type) {
   string actual_type = typeSharedObject(name);
   if (actual_type == needed_type) {
