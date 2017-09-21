@@ -80,8 +80,19 @@ public:
     cursor += n;
     return result;
   }
+  const char *get_addr() {
+    return memory.c_str() + cursor;
+  }
   void put_bytes(char *p, size_t n) {
     memory.append(p, n);
+  }
+  char *reserve_bytes(size_t n) {
+    size_t pos = memory.size();
+    memory.reserve(n);
+    for (size_t i = 0; i < n; i++) {
+      memory += '\0';
+    }
+    return (char *)(memory.c_str() + pos);
   }
   void put_cstring(char *p) {
     size_t n = strlen(p);

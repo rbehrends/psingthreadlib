@@ -21,7 +21,7 @@ proc threadLoadLib(thread th, string libname) {
 }
 
 proc threadExecFile(thread th, string file) {
-  threadExec(th, quote(read(eval(s))));
+  threadExec(th, quote(execute(read(eval(file)))));
 }
 
 proc threadExecString(thread th, string s) {

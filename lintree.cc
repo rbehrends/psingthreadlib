@@ -16,6 +16,7 @@
 
 #include <coeffs/bigintmat.h>
 #include <coeffs/longrat.h>
+#include <coeffs/shortfl.h>
 
 #include <polys/monomials/ring.h>
 #include <polys/monomials/p_polys.h>
@@ -35,6 +36,8 @@
 #include <Singular/cntrlc.h>
 #include <Singular/lists.h>
 #include <Singular/blackbox.h>
+
+number nlRInit(long);
 
 namespace LinTree {
 
@@ -126,6 +129,20 @@ leftv new_leftv(int code, long data) {
   return result;
 }
 
+void encode_mpz(LinTree &lintree, const mpz_t num) {
+  size_t nbytes = (mpz_sizeinbase(num, 2) + 7UL) / 8UL;
+  char *p = (char *) alloca(nbytes);
+  mpz_export(p, &nbytes, 1, 1, 0, 0, num);
+  lintree.put(nbytes);
+  lintree.put_bytes(p, nbytes);
+}
+
+void decode_mpz(LinTree &lintree, mpz_t &num) {
+  size_t nbytes = lintree.get<size_t>();
+  const char *p = lintree.get_bytes(nbytes);
+  mpz_import(num, nbytes, 1, 1, 0, 0, p);
+}
+
 // NONE
 
 void encode_none(LinTree &lintree, leftv val) {
@@ -209,6 +226,42 @@ void ref_def(LinTree &lintree, int by) {
 
 // NUMBER_CMD
 
+
+void encode_longrat_cf(LinTree &lintree, const number n) {
+  if (SR_HDL(n) & SR_INT) {
+    long nn = SR_TO_INT(n);
+    lintree.put<int>(-1);
+    lintree.put<long>(nn);
+  } else {
+    lintree.put<int>(n->s);
+    if (n->s < 2) {
+      encode_mpz(lintree, n->z);
+      encode_mpz(lintree, n->n);
+    } else {
+      encode_mpz(lintree, n->z);
+    }
+  }
+}
+
+number decode_longrat_cf(LinTree &lintree) {
+  number result;
+  int subtype = lintree.get_int();
+  if (subtype < 0)
+    result = INT_TO_SR(lintree.get<long>());
+  else if (subtype < 2) {
+    result = nlRInit(0);
+    mpz_init(result->n);
+    decode_mpz(lintree, result->z);
+    decode_mpz(lintree, result->n);
+    result->s = subtype;
+  } else {
+    result = nlRInit(0);
+    decode_mpz(lintree, result->z);
+    result->s = subtype;
+  }
+  return result;
+}
+
 void encode_number_cf(LinTree &lintree, const number n, const coeffs cf) {
   void encode_poly(LinTree &lintree, int typ, poly p, const ring r);
   n_coeffType ct = getCoeffType(cf);
@@ -226,6 +279,9 @@ void encode_number_cf(LinTree &lintree, const number n, const coeffs cf) {
       break;
     case n_Zp:
       lintree.put<long>((long) n);
+      break;
+    case n_Q:
+      encode_longrat_cf(lintree, n);
       break;
     default:
       lintree.mark_error("coefficient type not supported");
@@ -248,6 +304,8 @@ number decode_number_cf(LinTree &lintree, const coeffs cf) {
       return (number) decode_poly(lintree, cf->extRing);
     case n_Zp:
       return (number) (lintree.get<long>());
+    case n_Q:
+      return decode_longrat_cf(lintree);
     default:
       lintree.mark_error("coefficient type not supported");
       return NULL;
