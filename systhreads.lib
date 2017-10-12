@@ -12,8 +12,8 @@ synchronization variables.
 KEYWORDS: parallel computing
 ";
 
-proc mod_init() {
-  LIB "systhreadsDyn.so";
+static proc mod_init() {
+  LIB "systhreads.so";
 }
 
 proc threadLoadLib(thread th, string libname) {
