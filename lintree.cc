@@ -342,6 +342,40 @@ void ref_number(LinTree &lintree, int by) {
   }
 }
 
+// INTMAT_CMD
+
+leftv decode_intmat(LinTree &lintree) {
+  int rows = lintree.get_int();
+  int cols = lintree.get_int();
+  int len = rows * cols;
+  intvec *v = new intvec(rows, cols, 0);
+  for (int i = 0; i < len; i++) {
+    (*v)[i] = lintree.get_int();
+  }
+  return new_leftv(INTMAT_CMD, v);
+}
+
+void encode_intmat(LinTree &lintree, leftv val) {
+  intvec *v = (intvec *)(val->Data());
+  int rows = v->rows();
+  int cols = v->cols();
+  int len = v->length();
+  lintree.put_int(rows);
+  lintree.put_int(cols);
+  for (int i = 0; i < len; i++) {
+    lintree.put_int((*v)[i]);
+  }
+}
+
+void ref_intmat(LinTree &lintree, int by) {
+  int rows = lintree.get_int();
+  int cols = lintree.get_int();
+  int len = rows * cols;
+  for (int i = 0; i < len; i++) {
+    (void) lintree.get_int();
+  }
+}
+
 // POLY_CMD
 
 void encode_poly(LinTree &lintree, int typ, poly p, const ring r) {
@@ -816,6 +850,7 @@ void init() {
   install(COMMAND, encode_command, decode_command, ref_command);
   install(DEF_CMD, encode_def, decode_def, ref_def);
   install(NUMBER_CMD, encode_number, decode_number, ref_number);
+  install(INTMAT_CMD, encode_intmat, decode_intmat, ref_intmat);
   set_needs_ring(NUMBER_CMD);
   install(RING_CMD, encode_ring, decode_ring, ref_ring);
   install(POLY_CMD, encode_poly, decode_poly, ref_poly);
