@@ -378,8 +378,10 @@ BOOLEAN shared_assign(leftv l, leftv r) {
       {
 	return TRUE; // out of array bounds or similiar
       }
-      shared_destroy(NULL, ll->data);
-      omFree(ll->data);
+      if (ll->data) {
+	shared_destroy(NULL, ll->data);
+	omFree(ll->data);
+      }
       ll->data = shared_copy(NULL,r->Data());
     }
   } else {
@@ -897,6 +899,10 @@ BOOLEAN receiveChannel(leftv result, leftv arg) {
     return TRUE;
   }
   Channel *channel = *(Channel **)arg->Data();
+  if (!channel) {
+    WerrorS("receiveChannel: channel has not been initialized");
+    return TRUE;
+  }
   string item = channel->receive();
   leftv val = LinTree::from_string(item);
   result->rtyp = val->Typ();
@@ -912,6 +918,10 @@ BOOLEAN statChannel(leftv result, leftv arg) {
     return TRUE;
   }
   Channel *channel = *(Channel **)arg->Data();
+  if (!channel) {
+    WerrorS("receiveChannel: channel has not been initialized");
+    return TRUE;
+  }
   long n = channel->count();
   result->rtyp = INT_CMD;
   result->data = (char *)n;
@@ -1125,6 +1135,7 @@ BOOLEAN createThread(leftv result, leftv arg) {
       sprintf(buf, "%d", i);
       string name(buf);
       thread->set_name(name);
+      thread->set_type(type_thread);
       ts->index = i;
       if (pthread_create(&ts->id, NULL, thread_main, ts)<0) {
         rcode = TRUE;
@@ -1226,19 +1237,19 @@ BOOLEAN threadExec(leftv result, leftv arg) {
   if (wrong_num_args("threadExec", arg, 2))
     return TRUE;
   if (arg->Typ() != type_thread) {
-    WerrorS("threadEval: argument is not a thread");
+    WerrorS("threadExec: argument is not a thread");
     return TRUE;
   }
   SingularThread *thread = *(SingularThread **)arg->Data();
   string expr = LinTree::to_string(arg->next);
   ThreadState *ts = thread->getThreadState();
   if (ts && ts->parent != pthread_self()) {
-    WerrorS("threadEval: can only be called from parent thread");
+    WerrorS("threadExec: can only be called from parent thread");
     return TRUE;
   }
   if (ts) ts->lock.lock();
   if (!ts || !ts->running || !ts->active) {
-    WerrorS("threadEval: thread is no longer running");
+    WerrorS("threadExec: thread is no longer running");
     if (ts) ts->lock.unlock();
     return TRUE;
   }

@@ -33,6 +33,17 @@ Example:
         threadResult(t);
         joinThread(t);
 
+If no result is needed, `threadExec(th, expr)` can be used instead, as
+can be the variants `threadExecString(th, string)` and
+`threadExecFile(th, filename)`.
+
+To load a library into a thread, `threadLoadLib(th, libname)` is available.
+
+A unique numeric per-thread id is available via `threadID()`. To check
+if the program is executing the main thread, the `mainThread()` function
+can be used; it'll return `1` for the main thread and `0` for all other
+threads.
+
 # Shared objects
 
 This library primarily provides a number of types to share data
