@@ -20,7 +20,10 @@ public:
   }
   void write(T& value) {
     lock.lock();
-    this->value = value;
+    if (!init) {
+      this->value = value;
+      this->init = true;
+    }
     if (waiting)
       cond.signal();
     lock.unlock();
