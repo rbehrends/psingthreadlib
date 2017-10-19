@@ -46,7 +46,7 @@ proc countPar(int n) {
   for (i = 1; i <= n; i++) {
       b = newBoard(n);
       b[1,i] = 1;
-      task tasks(i) = createTask(\"countParInstance\", b);
+      task tasks(i) = runTask(\"countParInstance\", b);
   }
   for (i = 1; i <= n; i++) {
     total = total + getResult(tasks(i));

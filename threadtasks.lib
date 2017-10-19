@@ -11,7 +11,7 @@ proc mod_init() {
   LIB "systhreads.lib";
   if (mainThread()) {
     newstruct("task",
-      "int id, string func, list args, int worker, int done, def result");
+      "int id, string func, list args, int worker, int started, int done, def result");
   }
   int numWorkers = 0;
   int initialized = 0;
@@ -124,7 +124,7 @@ proc startTaskSystem() {
   }
 }
 
-proc createTask(string func, list #) {
+proc runTask(string func, list #) {
   taskID++;
   list t = 0, func, #, workerID, taskID, 0;
   sendChannel(taskQueue, t);
@@ -133,9 +133,36 @@ proc createTask(string func, list #) {
   ts.args = #;
   ts.worker = workerID;
   ts.id = taskID;
+  ts.started = 1;
   ts.done = 0;
   localTasks[taskID] = ts;
   return(ts);
+}
+
+proc createTask(string func, list #) {
+  task ts;
+  taskID++;
+  ts.func = func;
+  ts.args = #;
+  ts.worker = workerID;
+  ts.id = taskID;
+  ts.started = 0;
+  ts.done = 0;
+  localTasks[taskID] = ts;
+  return(ts);
+}
+
+proc startTask(alias task t) {
+  if (!localTasks[t.id].started) {
+    sendChannel(taskQueue, list(0, func, t.args, t.worker, t.id, t.done));
+    localTasks[t.id].started = 1;
+  }
+}
+
+proc startTasks(list #) {
+  for (int i = 1; i <= size(#); i++) {
+    startTask(#[i]);
+  }
 }
 
 proc getResult(task t) {
@@ -143,6 +170,17 @@ proc getResult(task t) {
     waitTask(t);
   }
   return(localTasks[t.id].result);
+}
+
+proc getState(task t) {
+  int tid = t.id;
+  if (localTasks[tid].done) {
+    return "completed";
+  }
+  if (localTasks[tid].started) {
+    return "started";
+  }
+  return "created";
 }
 
 proc getCommand(alias task t) {

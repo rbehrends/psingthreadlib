@@ -29,7 +29,7 @@ int i;
 for (i = 1; i <= n; i++) {
   args[i] = i;
 }
-tasks = apply(args, x->{createTask("collatz", x)});
+tasks = apply(args, x->{runTask("collatz", x)});
 results = apply(tasks, getResult);
 int s = 0;
 int k;
