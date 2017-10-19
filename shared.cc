@@ -263,14 +263,14 @@ public:
   }
 };
 
-class Channel : public SharedObject {
+class SingularChannel : public SharedObject {
 private:
   queue<string> q;
   Lock lock;
   ConditionVariable cond;
 public:
-  Channel(): SharedObject(), lock(), cond(&lock) { }
-  virtual ~Channel() { }
+  SingularChannel(): SharedObject(), lock(), cond(&lock) { }
+  virtual ~SingularChannel() { }
   void send(string item) {
     lock.lock();
     q.push(item);
@@ -513,7 +513,7 @@ int not_a_uri(const char *name, leftv arg) {
 }
 
 int not_a_region(const char *name, leftv arg) {
-  if (arg->Typ() != type_region) {
+  if (arg->Typ() != type_region || !arg->Data()) {
     report("%s: not a region", name);
     return TRUE;
   }
@@ -534,7 +534,7 @@ SharedObject *consList() {
 }
 
 SharedObject *consChannel() {
-  return new Channel();
+  return new SingularChannel();
 }
 
 SharedObject *consSyncVar() {
@@ -720,6 +720,10 @@ BOOLEAN getTable(leftv result, leftv arg) {
     return TRUE;
   }
   TxTable *table = *(TxTable **) arg->Data();
+  if (!table) {
+    WerrorS("getTable: table has not been initialized");
+    return TRUE;
+  }
   string key = (char *)(arg->next->Data());
   string value;
   int success = table->get(key, value);
@@ -749,6 +753,10 @@ BOOLEAN inTable(leftv result, leftv arg) {
     return TRUE;
   }
   TxTable *table = *(TxTable **) arg->Data();
+  if (!table) {
+    WerrorS("inTable: table has not been initialized");
+    return TRUE;
+  }
   string key = (char *)(arg->next->Data());
   int success = table->check(key);
   if (success < 0) {
@@ -772,6 +780,10 @@ BOOLEAN putTable(leftv result, leftv arg) {
     return TRUE;
   }
   TxTable *table = *(TxTable **) arg->Data();
+  if (!table) {
+    WerrorS("putTable: table has not been initialized");
+    return TRUE;
+  }
   string key = (char *)(arg->next->Data());
   string value = LinTree::to_string(arg->next->next);
   int success = table->put(key, value);
@@ -795,6 +807,10 @@ BOOLEAN getList(leftv result, leftv arg) {
     return TRUE;
   }
   TxList *list = *(TxList **) arg->Data();
+  if (!list) {
+    WerrorS("getList: list has not been initialized");
+    return TRUE;
+  }
   long index = (long)(arg->next->Data());
   string value;
   int success = list->get(index, value);
@@ -824,6 +840,10 @@ BOOLEAN putList(leftv result, leftv arg) {
     return TRUE;
   }
   TxList *list = *(TxList **) arg->Data();
+  if (!list) {
+    WerrorS("putList: list has not been initialized");
+    return TRUE;
+  }
   long index = (long)(arg->next->Data());
   string value = LinTree::to_string(arg->next->next);
   int success = list->put(index, value);
@@ -889,7 +909,11 @@ BOOLEAN sendChannel(leftv result, leftv arg) {
     WerrorS("sendChannel: argument is not a channel");
     return TRUE;
   }
-  Channel *channel = *(Channel **)arg->Data();
+  SingularChannel *channel = *(SingularChannel **)arg->Data();
+  if (!channel) {
+    WerrorS("sendChannel: channel has not been initialized");
+    return TRUE;
+  }
   channel->send(LinTree::to_string(arg->next));
   result->rtyp = NONE;
   return FALSE;
@@ -902,7 +926,7 @@ BOOLEAN receiveChannel(leftv result, leftv arg) {
     WerrorS("receiveChannel: argument is not a channel");
     return TRUE;
   }
-  Channel *channel = *(Channel **)arg->Data();
+  SingularChannel *channel = *(SingularChannel **)arg->Data();
   if (!channel) {
     WerrorS("receiveChannel: channel has not been initialized");
     return TRUE;
@@ -921,7 +945,7 @@ BOOLEAN statChannel(leftv result, leftv arg) {
     WerrorS("statChannel: argument is not a channel");
     return TRUE;
   }
-  Channel *channel = *(Channel **)arg->Data();
+  SingularChannel *channel = *(SingularChannel **)arg->Data();
   if (!channel) {
     WerrorS("receiveChannel: channel has not been initialized");
     return TRUE;
@@ -940,6 +964,10 @@ BOOLEAN writeSyncVar(leftv result, leftv arg) {
     return TRUE;
   }
   SyncVar *syncvar = *(SyncVar **)arg->Data();
+  if (!syncvar) {
+    WerrorS("writeSyncVar: syncvar has not been initialized");
+    return TRUE;
+  }
   if (!syncvar->write(LinTree::to_string(arg->next))) {
     WerrorS("writeSyncVar: variable already has a value");
     return TRUE;
@@ -956,6 +984,10 @@ BOOLEAN readSyncVar(leftv result, leftv arg) {
     return TRUE;
   }
   SyncVar *syncvar = *(SyncVar **)arg->Data();
+  if (!syncvar) {
+    WerrorS("readSyncVar: syncvar has not been initialized");
+    return TRUE;
+  }
   string item = syncvar->read();
   leftv val = LinTree::from_string(item);
   result->rtyp = val->Typ();
@@ -971,6 +1003,10 @@ BOOLEAN statSyncVar(leftv result, leftv arg) {
     return TRUE;
   }
   SyncVar *syncvar = *(SyncVar **)arg->Data();
+  if (!syncvar) {
+    WerrorS("statSyncVar: syncvar has not been initialized");
+    return TRUE;
+  }
   int init = syncvar->check();
   result->rtyp = INT_CMD;
   result->data = (char *)(long) init;
