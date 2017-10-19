@@ -161,20 +161,47 @@ static proc handleInit(alias list request) {
   }
 }
 
-proc waitTask(task t) {
-  int id = t.id;
+static proc pollIncoming() {
   list incoming;
   int tid;
+  incoming = receiveChannel(toWorker[workerID+1]);
+  tid = incoming[1];
+  if (tid > 0) {
+    localTasks[tid].done = 1;
+    localTasks[tid].result = incoming[2];
+  } else {
+    handleInit(incoming);
+  }
+}
+
+proc waitTasks(list T, int n) {
+  int i, fin, k;
+  list result;
+  while (1) {
+    fin = 0;
+    for (i = 1; i <= size(T); i++) {
+      if (localTasks[T[i].id].done) {
+        fin++;
+      }
+    }
+    if (fin >= n) { break; }
+    pollIncoming();
+  }
+  k = 1;
+  for (i = 1; i <= size(T); i++) {
+    if (localTasks[T[i].id].done) {
+      result[k] = i;
+      k++;
+    }
+  }
+  return (result);
+}
+
+proc waitTask(task t) {
+  int id = t.id;
   while (1) {
     if (localTasks[id].done) { return (); }
-    incoming = receiveChannel(toWorker[workerID+1]);
-    tid = incoming[1];
-    if (tid > 0) {
-      localTasks[tid].done = 1;
-      localTasks[tid].result = incoming[2];
-    } else {
-      handleInit(incoming);
-    }
+    pollIncoming();
   }
 }
 
@@ -183,3 +210,5 @@ proc waitAllTasks(list tasks) {
     waitTask(tasks[i]);
   }
 }
+
+// vim: set filetype=singular
