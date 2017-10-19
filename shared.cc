@@ -223,7 +223,7 @@ public:
 
 class TxList: public Transactional {
 private:
-  vector<string, SharedAllocator<string> > entries;
+  vector<string> entries;
 public:
   TxList() : Transactional(), entries() { }
   virtual ~TxList() { }
@@ -263,7 +263,7 @@ public:
 
 class Channel : public SharedObject {
 private:
-  deque<string, SharedAllocator<string> > q;
+  deque<string> q;
   Lock lock;
   ConditionVariable cond;
 public:

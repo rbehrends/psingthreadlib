@@ -15,6 +15,8 @@ T *shared_alloc0(std::size_t n);
 template <typename T>
 T shared_free(T *p);
 
+#ifdef USE_SHARED_ALLOCATOR
+
 template <class T>
 struct SharedAllocator {
   typedef T value_type;
@@ -44,6 +46,8 @@ public:
   SharedVector(std::size_t n, const T& value = T()) : std::vector<T, SharedAllocator<T> >(n, value) { }
   SharedVector(SharedVector &other) : std::vector<T, SharedAllocator<T> >(&other) { }
 };
+
+#endif
 
 }
 
