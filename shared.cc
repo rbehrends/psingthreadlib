@@ -23,6 +23,8 @@
 
 using namespace std;
 
+extern char *global_argv0;
+
 namespace LibThread {
 
 class SharedObject {
@@ -1041,6 +1043,8 @@ public:
   bool active;
   bool running;
   int index;
+  void *(*thread_func)(ThreadState *, void *);
+  void *arg, *result;
   pthread_t id;
   pthread_t parent;
   Lock lock;
@@ -1065,14 +1069,12 @@ void setOption(int ch) {
   feSetOptValue((feOptIndex) index, (int) 1);
 }
 
-char thread_arg0[] = "./Singular/Singular";
-
 void thread_init() {
   master_lock.lock();
   thread_id = ++thread_counter;
   master_lock.unlock();
   onThreadInit();
-  siInit(thread_arg0);
+  siInit(global_argv0);
   setOption('q');
   // setOption('b');
 }
@@ -1080,6 +1082,10 @@ void thread_init() {
 void *thread_main(void *arg) {
   ThreadState *ts = (ThreadState *)arg;
   thread_init();
+  return ts->thread_func(ts, ts->arg);
+}
+
+void *interpreter_thread(ThreadState *ts, void *arg) {
   ts->lock.lock();
   for (;;) {
     bool eval = false;
@@ -1124,32 +1130,52 @@ public:
   }
 };
 
-static ThreadState *newThread(void *(*thread_func)(void *), const char **error) {
-  ThreadState *ts;
-  *error = NULL;
+static ThreadState *newThread(void *(*thread_func)(ThreadState *, void *),
+    void *arg, const char **error) {
+  ThreadState *ts = NULL;
+  if (error) *error = NULL;
   thread_lock.lock();
   for (int i=0; i<MAX_THREADS; i++) {
     if (!thread_state[i].active) {
       ts = thread_state + i;
       ts->index = i;
       if (pthread_create(&ts->id, NULL, thread_main, ts)<0) {
-	*error = "createThread: internal error: failed to create thread";
-	goto error;
+	if (error)
+	  *error = "createThread: internal error: failed to create thread";
+	goto fail;
       }
       ts->parent = pthread_self();
       ts->active = true;
       ts->running = true;
       ts->to_thread = queue<string>();
       ts->from_thread = queue<string>();
+      ts->thread_func = thread_func;
+      ts->arg = arg;
+      ts->result = NULL;
       goto exit;
     }
   }
-  *error = "createThread: too many threads";
-  error:
+  if (error) *error = "createThread: too many threads";
+  fail:
   ts = NULL;
   exit:
   thread_lock.unlock();
   return ts;
+}
+
+ThreadState *createThread(void *(*thread_func)(ThreadState *, void *),
+    void *arg) {
+  return newThread(thread_func, arg, NULL);
+}
+
+void *joinThread(ThreadState *ts) {
+  void *result;
+  pthread_join(ts->id, NULL);
+  result = ts->result;
+  thread_lock.lock();
+  ts->running = false;
+  ts->active = false;
+  thread_lock.unlock();
 }
 
 static BOOLEAN createThread(leftv result, leftv arg) {
@@ -1157,7 +1183,7 @@ static BOOLEAN createThread(leftv result, leftv arg) {
   const char *error;
   if (wrong_num_args("createThread", arg, 0))
     return TRUE;
-  ThreadState *ts = newThread(thread_main, &error);
+  ThreadState *ts = newThread(interpreter_thread, NULL, &error);
   if (error) {
     WerrorS(error);
     return TRUE;

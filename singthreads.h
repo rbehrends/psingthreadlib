@@ -8,6 +8,12 @@
 
 namespace LibThread {
 
+class ThreadState;
+typedef void *(*ThreadFunc)(ThreadState *, void *);
+
+ThreadState *createThread(ThreadFunc body, void **arg, const char **error);
+void *joinThread(ThreadState *thread);
+
 template <typename T>
 T *shared_alloc(std::size_t n);
 template <typename T>
