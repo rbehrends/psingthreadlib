@@ -9,6 +9,9 @@
 #include <sys/mman.h>
 
 #include "thread.h"
+#include "singthreads.h"
+
+using namespace std;
 
 void ThreadError(const char *message) {
   fprintf(stderr, "FATAL ERROR: %s\n", message);
@@ -30,4 +33,21 @@ void Semaphore::post() {
   if (count++ == 0 && waiting)
     condition.signal();
   lock.unlock();
+}
+
+namespace LibThread {
+  template <typename T>
+  T *shared_alloc(size_t n) {
+    T *p = (T *) malloc(n * sizeof(T));
+    return p;
+  }
+  template <typename T>
+  T *shared_alloc0(size_t n) {
+    T *p = (T *) calloc(n, sizeof(T));
+    return p;
+  }
+  template <typename T>
+  void shared_free(T *p) {
+    free(p);
+  }
 }

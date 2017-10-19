@@ -15,9 +15,11 @@
 #include <vector>
 #include <map>
 #include <iterator>
-#include <queue>
+#include <deque>
 #include "thread.h"
 #include "lintree.h"
+
+#include "singthreads.h"
 
 using namespace std;
 
@@ -221,7 +223,7 @@ public:
 
 class TxList: public Transactional {
 private:
-  vector<string> entries;
+  vector<string, SharedAllocator<string> > entries;
 public:
   TxList() : Transactional(), entries() { }
   virtual ~TxList() { }
@@ -261,7 +263,7 @@ public:
 
 class Channel : public SharedObject {
 private:
-  queue<string> q;
+  deque<string, SharedAllocator<string> > q;
   Lock lock;
   ConditionVariable cond;
 public:
@@ -269,7 +271,7 @@ public:
   virtual ~Channel() { }
   void send(string item) {
     lock.lock();
-    q.push(item);
+    q.push_back(item);
     cond.signal();
     lock.unlock();
   }
@@ -279,7 +281,7 @@ public:
       cond.wait();
     }
     string result = q.front();
-    q.pop();
+    q.pop_front();
     if (!q.empty())
       cond.signal();
     lock.unlock();
@@ -1044,8 +1046,8 @@ public:
   Lock lock;
   ConditionVariable to_cond;
   ConditionVariable from_cond;
-  queue<string> to_thread;
-  queue<string> from_thread;
+  deque<string> to_thread;
+  deque<string> from_thread;
   ThreadState() : lock(), to_cond(&lock), from_cond(&lock),
                   to_thread(), from_thread() {
     active = false;
@@ -1096,14 +1098,14 @@ void *thread_main(void *arg) {
         eval = true;
 	break;
     }
-    ts->to_thread.pop();
+    ts->to_thread.pop_front();
     expr = ts->to_thread.front();
     /* this will implicitly eval commands */
     leftv val = LinTree::from_string(expr);
     expr = LinTree::to_string(val);
-    ts->to_thread.pop();
+    ts->to_thread.pop_front();
     if (eval)
-      ts->from_thread.push(expr);
+      ts->from_thread.push_back(expr);
     ts->from_cond.signal();
   }
   ts->lock.unlock();
@@ -1145,8 +1147,8 @@ BOOLEAN createThread(leftv result, leftv arg) {
       ts->parent = pthread_self();
       ts->active = true;
       ts->running = true;
-      ts->to_thread = queue<string>();
-      ts->from_thread = queue<string>();
+      ts->to_thread = deque<string>();
+      ts->from_thread = deque<string>();
       result->rtyp = type_thread;
       result->data = new_shared(thread);
       goto exit;
@@ -1174,7 +1176,7 @@ BOOLEAN joinThread(leftv result, leftv arg) {
   }
   ts->lock.lock();
   string quit("q");
-  ts->to_thread.push(quit);
+  ts->to_thread.push_back(quit);
   ts->to_cond.signal();
   ts->lock.unlock();
   pthread_join(ts->id, NULL);
@@ -1225,8 +1227,8 @@ BOOLEAN threadEval(leftv result, leftv arg) {
     if (ts) ts->lock.unlock();
     return TRUE;
   }
-  ts->to_thread.push("e");
-  ts->to_thread.push(expr);
+  ts->to_thread.push_back("e");
+  ts->to_thread.push_back(expr);
   ts->to_cond.signal();
   ts->lock.unlock();
   result->rtyp = NONE;
@@ -1253,8 +1255,8 @@ BOOLEAN threadExec(leftv result, leftv arg) {
     if (ts) ts->lock.unlock();
     return TRUE;
   }
-  ts->to_thread.push("x");
-  ts->to_thread.push(expr);
+  ts->to_thread.push_back("x");
+  ts->to_thread.push_back(expr);
   ts->to_cond.signal();
   ts->lock.unlock();
   result->rtyp = NONE;
@@ -1284,7 +1286,7 @@ BOOLEAN threadResult(leftv result, leftv arg) {
     ts->from_cond.wait();
   }
   string expr = ts->from_thread.front();
-  ts->from_thread.pop();
+  ts->from_thread.pop_front();
   ts->lock.unlock();
   leftv val = LinTree::from_string(expr);
   result->rtyp = val->Typ();
