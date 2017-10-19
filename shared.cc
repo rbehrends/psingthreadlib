@@ -297,15 +297,15 @@ public:
   }
 };
 
-class SyncVar : public SharedObject {
+class SingularSyncVar : public SharedObject {
 private:
   string value;
   int init;
   Lock lock;
   ConditionVariable cond;
 public:
-  SyncVar(): SharedObject(), init(0), lock(), cond(&lock) { }
-  virtual ~SyncVar() { }
+  SingularSyncVar(): SharedObject(), init(0), lock(), cond(&lock) { }
+  virtual ~SingularSyncVar() { }
   int write(string item) {
     int result = 0;
     lock.lock();
@@ -538,7 +538,7 @@ SharedObject *consChannel() {
 }
 
 SharedObject *consSyncVar() {
-  return new SyncVar();
+  return new SingularSyncVar();
 }
 
 SharedObject *consRegion() {
@@ -963,7 +963,7 @@ BOOLEAN writeSyncVar(leftv result, leftv arg) {
     WerrorS("writeSyncVar: argument is not a syncvar");
     return TRUE;
   }
-  SyncVar *syncvar = *(SyncVar **)arg->Data();
+  SingularSyncVar *syncvar = *(SingularSyncVar **)arg->Data();
   if (!syncvar) {
     WerrorS("writeSyncVar: syncvar has not been initialized");
     return TRUE;
@@ -983,7 +983,7 @@ BOOLEAN readSyncVar(leftv result, leftv arg) {
     WerrorS("readSyncVar: argument is not a syncvar");
     return TRUE;
   }
-  SyncVar *syncvar = *(SyncVar **)arg->Data();
+  SingularSyncVar *syncvar = *(SingularSyncVar **)arg->Data();
   if (!syncvar) {
     WerrorS("readSyncVar: syncvar has not been initialized");
     return TRUE;
@@ -1002,7 +1002,7 @@ BOOLEAN statSyncVar(leftv result, leftv arg) {
     WerrorS("statSyncVar: argument is not a syncvar");
     return TRUE;
   }
-  SyncVar *syncvar = *(SyncVar **)arg->Data();
+  SingularSyncVar *syncvar = *(SingularSyncVar **)arg->Data();
   if (!syncvar) {
     WerrorS("statSyncVar: syncvar has not been initialized");
     return TRUE;

@@ -87,16 +87,13 @@ public:
 class Semaphore {
 private:
   Lock lock;
-  ConditionVariable condition;
+  ConditionVariable cond;
   unsigned count;
   unsigned waiting;
 public:
-  Semaphore() {
-    condition.lock = &lock;
-    count = 0;
+  Semaphore() : lock(), cond(&lock), count(0), waiting(0) {
   }
-  Semaphore(unsigned count0) {
-    count = count0;
+  Semaphore(unsigned count0) : lock(), cond(&lock), count(count0), waiting(0) {
   }
   void wait();
   void post();

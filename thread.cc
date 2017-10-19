@@ -22,7 +22,7 @@ void Semaphore::wait() {
   lock.lock();
   waiting++;
   while (count == 0)
-    condition.wait();
+    cond.wait();
   waiting--;
   count--;
   lock.unlock();
@@ -31,7 +31,7 @@ void Semaphore::wait() {
 void Semaphore::post() {
   lock.lock();
   if (count++ == 0 && waiting)
-    condition.signal();
+    cond.signal();
   lock.unlock();
 }
 
