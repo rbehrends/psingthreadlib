@@ -25,7 +25,7 @@ proc mod_init() {
   export(initialized);
 }
 
-proc initChannels(int nWorkers) {
+static proc initChannels(int nWorkers) {
   list toWorker;
   list fromWorker;
   channel taskQueue = makeChannel("threadtasks:taskQueue");
@@ -50,7 +50,7 @@ static proc callVarargs(string func, list #) {
   return(result);
 }
 
-proc startWorker(int id) {
+static proc startWorker(int id) {
   list job;
   int jobtype;
   string func;
