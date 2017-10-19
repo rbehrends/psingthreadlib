@@ -15,7 +15,7 @@
 #include <vector>
 #include <map>
 #include <iterator>
-#include <deque>
+#include <queue>
 #include "thread.h"
 #include "lintree.h"
 
@@ -263,7 +263,7 @@ public:
 
 class Channel : public SharedObject {
 private:
-  deque<string> q;
+  queue<string> q;
   Lock lock;
   ConditionVariable cond;
 public:
@@ -271,7 +271,7 @@ public:
   virtual ~Channel() { }
   void send(string item) {
     lock.lock();
-    q.push_back(item);
+    q.push(item);
     cond.signal();
     lock.unlock();
   }
@@ -281,7 +281,7 @@ public:
       cond.wait();
     }
     string result = q.front();
-    q.pop_front();
+    q.pop();
     if (!q.empty())
       cond.signal();
     lock.unlock();
@@ -1046,8 +1046,8 @@ public:
   Lock lock;
   ConditionVariable to_cond;
   ConditionVariable from_cond;
-  deque<string> to_thread;
-  deque<string> from_thread;
+  queue<string> to_thread;
+  queue<string> from_thread;
   ThreadState() : lock(), to_cond(&lock), from_cond(&lock),
                   to_thread(), from_thread() {
     active = false;
@@ -1065,7 +1065,7 @@ void setOption(int ch) {
   feSetOptValue((feOptIndex) index, (int) 1);
 }
 
-char thread_arg0[] = "<Singular Thread>";
+char thread_arg0[] = "./Singular/Singular";
 
 void thread_init() {
   master_lock.lock();
@@ -1098,77 +1098,89 @@ void *thread_main(void *arg) {
         eval = true;
 	break;
     }
-    ts->to_thread.pop_front();
+    ts->to_thread.pop();
     expr = ts->to_thread.front();
     /* this will implicitly eval commands */
     leftv val = LinTree::from_string(expr);
     expr = LinTree::to_string(val);
-    ts->to_thread.pop_front();
+    ts->to_thread.pop();
     if (eval)
-      ts->from_thread.push_back(expr);
+      ts->from_thread.push(expr);
     ts->from_cond.signal();
   }
   ts->lock.unlock();
+  return NULL;
 }
 
-class SingularThread : public SharedObject {
+class InterpreterThread : public SharedObject {
 private:
   ThreadState *ts;
 public:
-  SingularThread(ThreadState *ts_init) : SharedObject(), ts(ts_init) { }
-  virtual ~SingularThread() { }
+  InterpreterThread(ThreadState *ts_init) : SharedObject(), ts(ts_init) { }
+  virtual ~InterpreterThread() { }
   ThreadState *getThreadState() { return ts; }
   void clearThreadState() {
     ts = NULL;
   }
 };
 
-BOOLEAN createThread(leftv result, leftv arg) {
-  int i;
-  BOOLEAN rcode = FALSE;
-  if (wrong_num_args("createThread", arg, 0))
-    return TRUE;
+static ThreadState *newThread(void *(*thread_func)(void *), const char **error) {
+  ThreadState *ts;
+  *error = NULL;
   thread_lock.lock();
-  for (i=0; i<MAX_THREADS; i++) {
+  for (int i=0; i<MAX_THREADS; i++) {
     if (!thread_state[i].active) {
-      ThreadState *ts = thread_state + i;
-      SingularThread *thread = new SingularThread(ts);
-      char buf[10];
-      sprintf(buf, "%d", i);
-      string name(buf);
-      thread->set_name(name);
-      thread->set_type(type_thread);
+      ts = thread_state + i;
       ts->index = i;
       if (pthread_create(&ts->id, NULL, thread_main, ts)<0) {
-        rcode = TRUE;
-	WerrorS("createThread: internal error: failed to create thread");
-	goto exit;
+	*error = "createThread: internal error: failed to create thread";
+	goto error;
       }
       ts->parent = pthread_self();
       ts->active = true;
       ts->running = true;
-      ts->to_thread = deque<string>();
-      ts->from_thread = deque<string>();
-      result->rtyp = type_thread;
-      result->data = new_shared(thread);
+      ts->to_thread = queue<string>();
+      ts->from_thread = queue<string>();
       goto exit;
     }
   }
-  WerrorS("createThread: too many threads");
-  rcode = TRUE;
+  *error = "createThread: too many threads";
+  error:
+  ts = NULL;
   exit:
   thread_lock.unlock();
-  return rcode;
+  return ts;
 }
 
-BOOLEAN joinThread(leftv result, leftv arg) {
+static BOOLEAN createThread(leftv result, leftv arg) {
+  int i;
+  const char *error;
+  if (wrong_num_args("createThread", arg, 0))
+    return TRUE;
+  ThreadState *ts = newThread(thread_main, &error);
+  if (error) {
+    WerrorS(error);
+    return TRUE;
+  }
+  InterpreterThread *thread = new InterpreterThread(ts);
+  char buf[10];
+  sprintf(buf, "%d", i);
+  string name(buf);
+  thread->set_name(name);
+  thread->set_type(type_thread);
+  result->rtyp = type_thread;
+  result->data = new_shared(thread);
+  return FALSE;
+}
+
+static BOOLEAN joinThread(leftv result, leftv arg) {
   if (wrong_num_args("joinThread", arg, 1))
     return TRUE;
   if (arg->Typ() != type_thread) {
     WerrorS("joinThread: argument is not a thread");
     return TRUE;
   }
-  SingularThread *thread = *(SingularThread **)arg->Data();
+  InterpreterThread *thread = *(InterpreterThread **)arg->Data();
   ThreadState *ts = thread->getThreadState();
   if (ts && ts->parent != pthread_self()) {
     WerrorS("joinThread: can only be called from parent thread");
@@ -1176,7 +1188,7 @@ BOOLEAN joinThread(leftv result, leftv arg) {
   }
   ts->lock.lock();
   string quit("q");
-  ts->to_thread.push_back(quit);
+  ts->to_thread.push(quit);
   ts->to_cond.signal();
   ts->lock.unlock();
   pthread_join(ts->id, NULL);
@@ -1214,7 +1226,7 @@ BOOLEAN threadEval(leftv result, leftv arg) {
     WerrorS("threadEval: argument is not a thread");
     return TRUE;
   }
-  SingularThread *thread = *(SingularThread **)arg->Data();
+  InterpreterThread *thread = *(InterpreterThread **)arg->Data();
   string expr = LinTree::to_string(arg->next);
   ThreadState *ts = thread->getThreadState();
   if (ts && ts->parent != pthread_self()) {
@@ -1227,8 +1239,8 @@ BOOLEAN threadEval(leftv result, leftv arg) {
     if (ts) ts->lock.unlock();
     return TRUE;
   }
-  ts->to_thread.push_back("e");
-  ts->to_thread.push_back(expr);
+  ts->to_thread.push("e");
+  ts->to_thread.push(expr);
   ts->to_cond.signal();
   ts->lock.unlock();
   result->rtyp = NONE;
@@ -1242,7 +1254,7 @@ BOOLEAN threadExec(leftv result, leftv arg) {
     WerrorS("threadExec: argument is not a thread");
     return TRUE;
   }
-  SingularThread *thread = *(SingularThread **)arg->Data();
+  InterpreterThread *thread = *(InterpreterThread **)arg->Data();
   string expr = LinTree::to_string(arg->next);
   ThreadState *ts = thread->getThreadState();
   if (ts && ts->parent != pthread_self()) {
@@ -1255,8 +1267,8 @@ BOOLEAN threadExec(leftv result, leftv arg) {
     if (ts) ts->lock.unlock();
     return TRUE;
   }
-  ts->to_thread.push_back("x");
-  ts->to_thread.push_back(expr);
+  ts->to_thread.push("x");
+  ts->to_thread.push(expr);
   ts->to_cond.signal();
   ts->lock.unlock();
   result->rtyp = NONE;
@@ -1270,7 +1282,7 @@ BOOLEAN threadResult(leftv result, leftv arg) {
     WerrorS("threadResult: argument is not a thread");
     return TRUE;
   }
-  SingularThread *thread = *(SingularThread **)arg->Data();
+  InterpreterThread *thread = *(InterpreterThread **)arg->Data();
   ThreadState *ts = thread->getThreadState();
   if (ts && ts->parent != pthread_self()) {
     WerrorS("threadResult: can only be called from parent thread");
@@ -1286,7 +1298,7 @@ BOOLEAN threadResult(leftv result, leftv arg) {
     ts->from_cond.wait();
   }
   string expr = ts->from_thread.front();
-  ts->from_thread.pop_front();
+  ts->from_thread.pop();
   ts->lock.unlock();
   leftv val = LinTree::from_string(expr);
   result->rtyp = val->Typ();
