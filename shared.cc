@@ -27,6 +27,98 @@ extern char *global_argv0;
 
 namespace LibThread {
 
+class Command {
+private:
+  const char *name;
+  const char *error;
+  leftv result;
+  leftv *args;
+  int argc;
+public:
+  Command(const char *n, leftv r, leftv a)
+  {
+    name = n;
+    result = r;
+    error = NULL;
+    argc = 0;
+    for (leftv t = a; t != NULL; t = t->next) {
+      argc++;
+    }
+    args = (leftv *) omAlloc0(sizeof(leftv) * argc);
+    int i = 0;
+    for (leftv t = a; t != NULL; t = t->next) {
+      args[i++] = t;
+    }
+    result->rtyp = NONE;
+    result->data = NULL;
+  }
+  ~Command() {
+    omFree(args);
+  }
+  void check_argc(int n) {
+    if (error) return;
+    if (argc != n) error = "wrong number of arguments";
+  }
+  void check_argc(int lo, int hi) {
+    if (error) return;
+    if (argc < lo || argc > hi) error = "wrong number of arguments";
+  }
+  void check_arg(int i, int type, const char *err) {
+    if (error) return;
+    if (args[i]->Typ() != type) error = err;
+  }
+  void check_init(int i, const char *err) {
+    if (error) return;
+    leftv arg = args[i];
+    if (arg->Data() == NULL || *(void **)(arg->Data()) == NULL)
+      error = err;
+  }
+  void check_arg(int i, int type, int type2, const char *err) {
+    if (error) return;
+    if (args[i]->Typ() != type && args[i]->Typ() != type2) error = err;
+  }
+  int argtype(int i) {
+    return args[i]->Typ();
+  }
+  void *arg(int i) {
+    return args[i]->Data();
+  }
+  void report(const char *err) {
+    error = err;
+  }
+  // intentionally not bool, so we can also do
+  // q = p + test_arg(p, type);
+  int test_arg(int i, int type) {
+    if (i >= argc) return 0;
+    return args[i]->Typ() == type;
+  }
+  void set_result(long n) {
+    result->rtyp = INT_CMD;
+    result->data = (char *)n;
+  }
+  void set_result(const char *s) {
+    result->rtyp = STRING_CMD;
+    result->data = omStrDup(s);
+  }
+  void set_result(int type, void *p) {
+    result->rtyp = type;
+    result->data = (char *) p;
+  }
+  void set_result(int type, long n) {
+    result->rtyp = type;
+    result->data = (char *) n;
+  }
+  bool ok() {
+    return error == NULL;
+  }
+  BOOLEAN status() {
+    if (error) {
+      Werror("%s: %s", name, error);
+    }
+    return error != NULL;
+  }
+};
+
 class SharedObject {
 private:
   Lock lock;
@@ -40,9 +132,9 @@ public:
   int get_type() { return type; }
   void set_name(std::string &name_init) { name = name_init; }
   std::string &get_name() { return name; }
-  void incref() {
+  void incref(int by = 1) {
     lock.lock();
-    refcount++;
+    refcount += 1;
     lock.unlock();
   }
   long decref() {
@@ -111,6 +203,9 @@ int type_shared_table;
 int type_atomic_list;
 int type_shared_list;
 int type_thread;
+int type_threadpool;
+int type_job;
+int type_trigger;
 
 typedef SharedObject *SharedObjectPtr;
 typedef SharedObjectPtr (*SharedConstructor)();
@@ -468,6 +563,18 @@ char *shared_string(blackbox *b, void *d) {
     type_name = "regionlock";
   else if (type == type_thread) {
     sprintf(buf, "<thread #%s>", name.c_str());
+    return omStrDup(buf);
+  }
+  else if (type == type_threadpool) {
+    sprintf(buf, "<threadpool #%p>", obj);
+    return omStrDup(buf);
+  }
+  else if (type == type_job) {
+    sprintf(buf, "<job #%p>", obj);
+    return omStrDup(buf);
+  }
+  else if (type == type_trigger) {
+    sprintf(buf, "<trigger #%p>", obj);
     return omStrDup(buf);
   }
   sprintf(buf, "<%s \"%.40s\">", type_name, name.c_str());
@@ -1214,39 +1321,36 @@ void *joinThread(ThreadState *ts) {
   thread_lock.unlock();
 }
 
-static BOOLEAN createThread(leftv result, leftv arg) {
-  int i;
-  const char *error;
-  if (wrong_num_args("createThread", arg, 0))
-    return TRUE;
-  ThreadState *ts = newThread(interpreter_thread, NULL, &error);
-  if (error) {
-    WerrorS(error);
-    return TRUE;
-  }
+static InterpreterThread *createInterpreterThread(const char **error) {
+  ThreadState *ts = newThread(interpreter_thread, NULL, error);
+  if (*error) return NULL;
   InterpreterThread *thread = new InterpreterThread(ts);
   char buf[10];
-  sprintf(buf, "%d", i);
+  sprintf(buf, "%d", ts->index);
   string name(buf);
   thread->set_name(name);
   thread->set_type(type_thread);
-  result->rtyp = type_thread;
-  result->data = new_shared(thread);
-  return FALSE;
+  return thread;
 }
 
-static BOOLEAN joinThread(leftv result, leftv arg) {
-  if (wrong_num_args("joinThread", arg, 1))
-    return TRUE;
-  if (arg->Typ() != type_thread) {
-    WerrorS("joinThread: argument is not a thread");
-    return TRUE;
+static BOOLEAN createThread(leftv result, leftv arg) {
+  Command cmd("createThread", result, arg);
+  cmd.check_argc(0);
+  const char *error;
+  if (!cmd.ok()) return cmd.status();
+  InterpreterThread *thread = createInterpreterThread(&error);
+  if (error) {
+    cmd.report(error);
+    return cmd.status();
   }
-  InterpreterThread *thread = *(InterpreterThread **)arg->Data();
+  cmd.set_result(type_thread, thread);
+  return cmd.status();
+}
+
+static bool joinInterpreterThread(InterpreterThread *thread) {
   ThreadState *ts = thread->getThreadState();
   if (ts && ts->parent != pthread_self()) {
-    WerrorS("joinThread: can only be called from parent thread");
-    return TRUE;
+    return false;
   }
   ts->lock.lock();
   string quit("q");
@@ -1259,9 +1363,270 @@ static BOOLEAN joinThread(leftv result, leftv arg) {
   ts->active = false;
   thread->clearThreadState();
   thread_lock.unlock();
-  result->rtyp = NONE;
+  return true;
+}
+
+static BOOLEAN joinThread(leftv result, leftv arg) {
+  if (wrong_num_args("joinThread", arg, 1))
+    return TRUE;
+  if (arg->Typ() != type_thread) {
+    WerrorS("joinThread: argument is not a thread");
+    return TRUE;
+  }
+  InterpreterThread *thread = *(InterpreterThread **)arg->Data();
+  if (!joinInterpreterThread(thread)) {
+    WerrorS("joinThread: can only be called from parent thread");
+    return TRUE;
+  }
   return FALSE;
 }
+
+class ThreadPool;
+
+class Job : public SharedObject {
+public:
+  ThreadPool *pool;
+  long pending_index;
+  vector<Job *> deps;
+  vector<Job *> notify;
+  vector<string> args;
+  string result; // lintree-encoded
+  bool done;
+  bool queued;
+  bool running;
+  Lock lock;
+  Job() : SharedObject(), pool(NULL), deps(), pending_index(-1),
+    done(false), running(false), queued(false), result(), lock()
+  { }
+  ~Job();
+  void addDep(Job *job) {
+    deps.push_back(job);
+  }
+  bool ready();
+  virtual void execute() = 0;
+};
+
+bool Job::ready() {
+  bool result = false;
+  vector<Job *>::iterator it;
+  for (it = deps.begin(); it != deps.end(); it++) {
+    result |= (*it)->done;
+  }
+}
+
+Job::~Job() {
+  vector<Job *>::iterator it;
+  for (it = deps.begin(); it != deps.end(); it++) {
+    releaseShared(*it);
+  }
+}
+
+typedef queue<Job *> JobQueue;
+
+struct PoolInfo {
+  ThreadPool *pool;
+  int num;
+};
+
+class ThreadPool : public SharedObject {
+private:
+  bool single_threaded;
+  int nthreads;
+  bool shutting_down;
+  int shutdown_counter;
+  vector<ThreadState *> threads;
+  JobQueue global_queue;
+  vector<JobQueue *> thread_queues;
+  vector<Job *> pending;
+  Lock lock;
+  ConditionVariable cond;
+  ConditionVariable response;
+public:
+  ThreadPool(int n) :
+    SharedObject(), threads(), global_queue(), thread_queues(),
+    single_threaded(n==0), nthreads(n == 0 ? 1 : n),
+    lock(), cond(&lock), response(&lock),
+    shutting_down(false), shutdown_counter(0)
+  {
+  }
+  virtual ~ThreadPool() {
+    for (int i = 0; i < thread_queues.size(); i++) {
+      JobQueue *q = thread_queues[i];
+      while (!q->empty()) {
+        Job *job = q->front();
+	q->pop();
+	releaseShared(job);
+      }
+    }
+    thread_queues.clear();
+    threads.clear();
+  }
+  ThreadState *getThread(int i) { return threads[i]; }
+  void shutdown() {
+    if (single_threaded) return;
+    lock.lock();
+    while (shutdown_counter < nthreads) {
+      cond.broadcast();
+      response.wait();
+    }
+    lock.unlock();
+    for (int i = 0; i <threads.size(); i++) {
+      joinThread(threads[i]);
+    }
+  }
+  void addThread(ThreadState *thread) {
+    threads.push_back(thread);
+    thread_queues.push_back(new JobQueue());
+  }
+  void attachJob(Job *job) {
+    lock.lock();
+    job->lock.lock();
+    if (job->pending_index < 0) {
+      job->pool = this;
+      job->pending_index = pending.size();
+      pending.push_back(job);
+    }
+    job->lock.unlock();
+    lock.unlock();
+  }
+  void detachJob(Job *job) {
+    lock.lock();
+    job->lock.lock();
+    long i = job->pending_index;
+    job->pending_index = -1;
+    job->lock.unlock();
+    if (i >= 0) {
+      job = pending.back();
+      job->lock.lock();
+      pending.resize(pending.size()-1);
+      pending[i] = job;
+      job->pending_index = i;
+      job->lock.unlock();
+    }
+    lock.unlock();
+  }
+  void queueJob(Job *job) {
+    // assumes that job is already locked
+    acquireShared(job);
+    lock.lock();
+    global_queue.push(job);
+    lock.unlock();
+  }
+  void broadcastJob(Job *job) {
+    lock.lock();
+    for (int i = 0; i <thread_queues.size(); i++) {
+      acquireShared(job);
+      thread_queues[i]->push(job);
+    }
+    lock.unlock();
+  }
+  void waitJob(Job *job) {
+    lock.lock();
+    for (;;) {
+      job->lock.lock();
+      if (job->done) {
+	job->lock.unlock();
+	break;
+      }
+      job->lock.unlock();
+      response.wait();
+    }
+    response.signal(); // forward signal
+    lock.unlock();
+  }
+  void clearThreadState() {
+    threads.clear();
+  }
+  static void notifyDeps(ThreadPool *pool, Job *job) {
+    vector<Job *> &notify = job->notify;
+    job->incref(notify.size());
+    for (int i = 0; i <notify.size(); i++) {
+      Job *next = notify[i];
+      job->lock.lock();
+      if (!job->queued && job->ready()) {
+	job->queued = true;
+	job->lock.unlock();
+	pool->queueJob(job);
+      } else
+        job->lock.unlock();
+    }
+  }
+  static void *main(ThreadState *ts, void *arg) {
+    PoolInfo *info = (PoolInfo *) arg;
+    ThreadPool *pool = info->pool;
+    Lock &lock = pool->lock;
+    ConditionVariable &cond = pool->cond;
+    ConditionVariable &response = pool->response;
+    JobQueue *my_queue = pool->thread_queues[info->num];
+    thread_init();
+    pool->lock.lock();
+    for (;;) {
+      if (pool->shutting_down) {
+        pool->response.signal();
+	break;
+      }
+      if (!my_queue->empty()) {
+         Job *job = my_queue->front();
+	 my_queue->pop();
+	 lock.unlock();
+	 job->execute();
+	 notifyDeps(pool, job);
+	 releaseShared(job);
+	 pool->response.signal();
+	 lock.lock();
+      } else if (!pool->global_queue.empty()) {
+         Job *job = pool->global_queue.front();
+	 pool->global_queue.pop();
+	 lock.unlock();
+	 job->execute();
+	 notifyDeps(pool, job);
+	 releaseShared(job);
+	 pool->response.signal();
+	 lock.lock();
+      }
+      cond.wait();
+    }
+    pool->lock.unlock();
+    delete info;
+    return NULL;
+  }
+};
+
+static BOOLEAN createThreadPool(leftv result, leftv arg) {
+  long n;
+  Command cmd("createThreadPool", result, arg);
+  cmd.check_argc(1, 2);
+  cmd.check_arg(0, INT_CMD, "first argument must be an integer");
+  if (cmd.ok()) {
+    n = (long) cmd.arg(0);
+    if (n <= 0) cmd.report("number of threads must be positive");
+    else if (n >= 256) cmd.report("number of threads too large");
+  }
+  if (cmd.ok()) {
+    ThreadPool *pool = new ThreadPool((int) n);
+    for (int i = 0; i <n; i++) {
+      const char *error;
+      PoolInfo *info = new PoolInfo();
+      info->pool = pool;
+      info->num = i;
+      ThreadState *thread = newThread(ThreadPool::main, info, &error);
+      if (!thread) {
+        cmd.report(error);
+	return cmd.status();
+      }
+      pool->addThread(thread);
+    }
+    cmd.set_result(type_threadpool, pool);
+  }
+  return cmd.status();
+}
+
+static BOOLEAN closeThreadPool(leftv result, leftv arg) {
+  Command cmd("closeThreadPool", result, arg);
+  // TODO
+  return cmd.status();
+}
+
 
 BOOLEAN threadID(leftv result, leftv arg) {
   int i;
@@ -1415,11 +1780,22 @@ extern "C" int mod_init(SModulFunctions *fn)
 
   fn->iiAddCproc(libname, "createThread", FALSE, createThread);
   fn->iiAddCproc(libname, "joinThread", FALSE, joinThread);
+  fn->iiAddCproc(libname, "createThreadPool", FALSE, createThreadPool);
+  fn->iiAddCproc(libname, "closeThreadPool", FALSE, closeThreadPool);
   fn->iiAddCproc(libname, "threadID", FALSE, threadID);
   fn->iiAddCproc(libname, "mainThread", FALSE, mainThread);
   fn->iiAddCproc(libname, "threadEval", FALSE, threadEval);
   fn->iiAddCproc(libname, "threadExec", FALSE, threadExec);
   fn->iiAddCproc(libname, "threadResult", FALSE, threadResult);
+  // fn->iiAddCproc(libname, "createJob", FALSE, createJob);
+  // fn->iiAddCproc(libname, "nameJob", FALSE, nameJob);
+  // fn->iiAddCproc(libname, "getJobName", FALSE, getJobName);
+  // fn->iiAddCproc(libname, "startJob", FALSE, startJob);
+  // fn->iiAddCproc(libname, "waitJob", FALSE, startJob);
+  // fn->iiAddCproc(libname, "scheduleJob", FALSE, scheduleJob);
+  // fn->iiAddCproc(libname, "scheduleJobs", FALSE, scheduleJob);
+  // fn->iiAddCproc(libname, "createTrigger", FALSE, createTrigger);
+  // fn->iiAddCproc(libname, "activateTrigger", FALSE, activateTrigger);
 
   LinTree::init();
 
