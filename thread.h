@@ -73,8 +73,10 @@ public:
     lock->set_owner();
   }
   void signal() {
+    /*
     if (!lock->is_locked())
       ThreadError("signaled condition without locked mutex");
+    */
     pthread_cond_signal(&condition);
   }
   void broadcast() {

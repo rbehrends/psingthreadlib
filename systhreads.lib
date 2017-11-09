@@ -28,6 +28,18 @@ proc threadExecString(thread th, string s) {
   threadExec(th, quote(execute(eval(s))));
 }
 
+proc threadPoolLoadLib(threadpool th, string libname) {
+  threadPoolExec(th, quote(load(eval(libname), "with")));
+}
+
+proc threadPoolExecFile(threadpool th, string file) {
+  threadPoolExec(th, quote(execute(read(eval(file)))));
+}
+
+proc threadPoolExecString(threadpool th, string s) {
+  threadPoolExec(th, quote(execute(eval(s))));
+}
+
 proc bindTypedSharedObject(string name, string needed_type) {
   string actual_type = typeSharedObject(name);
   if (actual_type == needed_type) {

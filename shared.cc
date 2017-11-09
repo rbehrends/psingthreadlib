@@ -63,6 +63,10 @@ public:
     if (error) return;
     if (argc < lo || argc > hi) error = "wrong number of arguments";
   }
+  void check_argc_min(int n) {
+    if (error) return;
+    if (argc < n) error = "wrong number of arguments";
+  }
   void check_arg(int i, int type, const char *err) {
     if (error) return;
     if (args[i]->Typ() != type) error = err;
@@ -80,8 +84,14 @@ public:
   int argtype(int i) {
     return args[i]->Typ();
   }
+  int nargs() {
+    return argc;
+  }
   void *arg(int i) {
     return args[i]->Data();
+  }
+  long int_arg(int i) {
+    return (long)(args[i]->Data());
   }
   void report(const char *err) {
     error = err;
@@ -107,6 +117,9 @@ public:
   void set_result(int type, long n) {
     result->rtyp = type;
     result->data = (char *) n;
+  }
+  void no_result() {
+    result->rtyp = NONE;
   }
   bool ok() {
     return error == NULL;
@@ -161,7 +174,7 @@ void acquireShared(SharedObject *obj) {
 
 void releaseShared(SharedObject *obj) {
   if (obj->decref() == 0) {
-    delete obj;
+    // delete obj;
   }
 }
 
@@ -575,6 +588,9 @@ char *shared_string(blackbox *b, void *d) {
   }
   else if (type == type_trigger) {
     sprintf(buf, "<trigger #%p>", obj);
+    return omStrDup(buf);
+  } else {
+    sprintf(buf, "<unknown type %d>", type);
     return omStrDup(buf);
   }
   sprintf(buf, "<%s \"%.40s\">", type_name, name.c_str());
@@ -1343,7 +1359,7 @@ static BOOLEAN createThread(leftv result, leftv arg) {
     cmd.report(error);
     return cmd.status();
   }
-  cmd.set_result(type_thread, thread);
+  cmd.set_result(type_thread, new_shared(thread));
   return cmd.status();
 }
 
@@ -1396,22 +1412,26 @@ public:
   bool running;
   Lock lock;
   Job() : SharedObject(), pool(NULL), deps(), pending_index(-1),
-    done(false), running(false), queued(false), result(), lock()
-  { }
+    done(false), running(false), queued(false), result(), lock(),
+    args(), notify()
+  { set_type(type_job); }
   ~Job();
   void addDep(Job *job) {
     deps.push_back(job);
   }
+  void addDep(vector<Job *> &jobs);
+  void addNotify(vector<Job *> &jobs);
   bool ready();
   virtual void execute() = 0;
 };
 
 bool Job::ready() {
-  bool result = false;
+  bool result = true;
   vector<Job *>::iterator it;
   for (it = deps.begin(); it != deps.end(); it++) {
-    result |= (*it)->done;
+    result &= (*it)->done;
   }
+  return result;
 }
 
 Job::~Job() {
@@ -1427,6 +1447,9 @@ struct PoolInfo {
   ThreadPool *pool;
   int num;
 };
+
+static SIMPLE_THREAD_VAR ThreadPool *currentThreadPoolRef;
+static SIMPLE_THREAD_VAR Job *currentJobRef;
 
 class ThreadPool : public SharedObject {
 private:
@@ -1448,6 +1471,7 @@ public:
     lock(), cond(&lock), response(&lock),
     shutting_down(false), shutdown_counter(0)
   {
+    thread_queues.push_back(new JobQueue());
   }
   virtual ~ThreadPool() {
     for (int i = 0; i < thread_queues.size(); i++) {
@@ -1462,9 +1486,21 @@ public:
     threads.clear();
   }
   ThreadState *getThread(int i) { return threads[i]; }
-  void shutdown() {
-    if (single_threaded) return;
+  void shutdown(bool wait) {
+    if (single_threaded) {
+      PoolInfo *info = new PoolInfo();
+      info->num = 0;
+      info->pool = this;
+      ThreadPool::main(NULL, info);
+      return;
+    }
     lock.lock();
+    if (wait) {
+      while (!global_queue.empty()) {
+        response.wait();
+      }
+    }
+    shutting_down = true;
     while (shutdown_counter < nthreads) {
       cond.broadcast();
       response.wait();
@@ -1481,7 +1517,12 @@ public:
   void attachJob(Job *job) {
     lock.lock();
     job->lock.lock();
-    if (job->pending_index < 0) {
+    job->pool = this;
+    acquireShared(job);
+    if (job->ready()) {
+      global_queue.push(job);
+    }
+    else if (job->pending_index < 0) {
       job->pool = this;
       job->pending_index = pending.size();
       pending.push_back(job);
@@ -1507,9 +1548,9 @@ public:
   }
   void queueJob(Job *job) {
     // assumes that job is already locked
-    acquireShared(job);
     lock.lock();
     global_queue.push(job);
+    cond.signal();
     lock.unlock();
   }
   void broadcastJob(Job *job) {
@@ -1542,18 +1583,19 @@ public:
     job->incref(notify.size());
     for (int i = 0; i <notify.size(); i++) {
       Job *next = notify[i];
-      job->lock.lock();
-      if (!job->queued && job->ready()) {
-	job->queued = true;
-	job->lock.unlock();
-	pool->queueJob(job);
+      next->lock.lock();
+      if (!next->queued && next->ready()) {
+        next->queued = true;
+        next->lock.unlock();
+        pool->queueJob(next);
       } else
-        job->lock.unlock();
+        next->lock.unlock();
     }
   }
   static void *main(ThreadState *ts, void *arg) {
     PoolInfo *info = (PoolInfo *) arg;
     ThreadPool *pool = info->pool;
+    currentThreadPoolRef = pool;
     Lock &lock = pool->lock;
     ConditionVariable &cond = pool->cond;
     ConditionVariable &response = pool->response;
@@ -1566,31 +1608,57 @@ public:
 	break;
       }
       if (!my_queue->empty()) {
-         Job *job = my_queue->front();
-	 my_queue->pop();
-	 lock.unlock();
-	 job->execute();
-	 notifyDeps(pool, job);
-	 releaseShared(job);
-	 pool->response.signal();
-	 lock.lock();
+       Job *job = my_queue->front();
+       my_queue->pop();
+       lock.unlock();
+       currentJobRef = job;
+       job->execute();
+       currentJobRef = NULL;
+       job->lock.lock();
+       job->done = true;
+       notifyDeps(pool, job);
+       job->lock.unlock();
+       releaseShared(job);
+       pool->response.signal();
+       lock.lock();
       } else if (!pool->global_queue.empty()) {
-         Job *job = pool->global_queue.front();
-	 pool->global_queue.pop();
-	 lock.unlock();
-	 job->execute();
-	 notifyDeps(pool, job);
-	 releaseShared(job);
-	 pool->response.signal();
-	 lock.lock();
+       Job *job = pool->global_queue.front();
+       pool->global_queue.pop();
+       lock.unlock();
+       currentJobRef = job;
+       job->execute();
+       currentJobRef = NULL;
+       job->done = true;
+       notifyDeps(pool, job);
+       releaseShared(job);
+       pool->response.signal();
+       lock.lock();
+      } else {
+        if (pool->single_threaded) {
+          break;
+        }
+        cond.wait();
       }
-      cond.wait();
     }
+    currentThreadPoolRef = NULL;
     pool->lock.unlock();
     delete info;
     return NULL;
   }
 };
+void Job::addDep(vector<Job *> &jobs) {
+  deps.insert(deps.end(), jobs.begin(), jobs.end());
+}
+void Job::addNotify(vector<Job *> &jobs) {
+  lock.lock();
+  notify.insert(notify.end(), jobs.begin(), jobs.end());
+  if (done) {
+    lock.unlock();
+    ThreadPool::notifyDeps(pool, this);
+  }
+  else
+    lock.unlock();
+}
 
 static BOOLEAN createThreadPool(leftv result, leftv arg) {
   long n;
@@ -1599,11 +1667,12 @@ static BOOLEAN createThreadPool(leftv result, leftv arg) {
   cmd.check_arg(0, INT_CMD, "first argument must be an integer");
   if (cmd.ok()) {
     n = (long) cmd.arg(0);
-    if (n <= 0) cmd.report("number of threads must be positive");
+    if (n < 0) cmd.report("number of threads must be non-negative");
     else if (n >= 256) cmd.report("number of threads too large");
   }
   if (cmd.ok()) {
     ThreadPool *pool = new ThreadPool((int) n);
+    pool->set_type(type_threadpool);
     for (int i = 0; i <n; i++) {
       const char *error;
       PoolInfo *info = new PoolInfo();
@@ -1616,14 +1685,257 @@ static BOOLEAN createThreadPool(leftv result, leftv arg) {
       }
       pool->addThread(thread);
     }
-    cmd.set_result(type_threadpool, pool);
+    cmd.set_result(type_threadpool, new_shared(pool));
   }
   return cmd.status();
 }
 
 static BOOLEAN closeThreadPool(leftv result, leftv arg) {
   Command cmd("closeThreadPool", result, arg);
-  // TODO
+  cmd.check_argc(1, 2);
+  cmd.check_arg(0, type_threadpool, "first argument must be a threadpool");
+  cmd.check_init(0, "threadpool not initialized");
+  if (cmd.nargs() > 1)
+    cmd.check_arg(1, INT_CMD, "optional argument must be an integer");
+  if (cmd.ok()) {
+    ThreadPool *pool = *(ThreadPool **)(cmd.arg(0));
+    bool wait = cmd.nargs() == 2 ? (cmd.int_arg(1) != 0) : 1;
+    pool->shutdown(wait);
+    cmd.no_result();
+  }
+  return cmd.status();
+}
+
+BOOLEAN currentThreadPool(leftv result, leftv arg) {
+  Command cmd("currentThreadPool", result, arg);
+  cmd.check_argc(0);
+  ThreadPool *pool = currentThreadPoolRef;
+  if (pool) {
+    cmd.set_result(type_threadpool, new_shared(pool));
+  } else {
+    cmd.report("no current threadpool");
+  }
+  return cmd.status();
+}
+
+
+
+class EvalJob : public Job {
+public:
+  EvalJob() : Job() { }
+  virtual void execute() {
+    leftv val = LinTree::from_string(args[0]);
+    result = LinTree::to_string(val);
+    val->CleanUp();
+    omFreeBin(val, sleftv_bin);
+  }
+};
+
+class ExecJob : public Job {
+public:
+  ExecJob() : Job() { }
+  virtual void execute() {
+    leftv val = LinTree::from_string(args[0]);
+    val->CleanUp();
+    omFreeBin(val, sleftv_bin);
+  }
+};
+
+class ProcJob : public Job {
+  string procname;
+public:
+  ProcJob(const char *procname_init) : Job(),
+    procname(procname_init) {
+  }
+  void appendArg(vector<leftv> &argv, string &s) {
+    if (s.size() == 0) return;
+    leftv val = LinTree::from_string(s);
+    if (val->Typ() == NONE) {
+      omFreeBin(val, sleftv_bin);
+      return;
+    }
+    argv.push_back(val);
+  }
+  virtual void execute() {
+    vector<leftv> argv;
+    for (int i = 0; i <args.size(); i++) {
+      appendArg(argv, args[i]);
+    }
+    for (int i = 0; i < deps.size(); i++) {
+      appendArg(argv, deps[i]->result);
+    }
+    leftv procnode = (leftv) omAlloc0Bin(sleftv_bin);
+    procnode->name = omStrDup(procname.c_str());
+    procnode->req_packhdl = basePack;
+    int error = procnode->Eval();
+    if (error) {
+      Werror("job execution: procedure \"%s\" not found", procname.c_str());
+      return;
+    }
+    sleftv val;
+    memset(&val, 0, sizeof(val));
+    leftv *tail = &procnode->next;
+    for (int i = 0; i < argv.size(); i++) {
+      *tail = argv[i];
+      tail = &(*tail)->next;
+    }
+    *tail = NULL;
+    error = iiExprArithM(&val, procnode, '(');
+    if (error) {
+      Werror("job execution: procedure call of \"%s\" failed", procname.c_str());
+      return;
+    }
+    result = LinTree::to_string(&val);
+    // val.CleanUp();
+  }
+};
+
+static BOOLEAN createJob(leftv result, leftv arg) {
+  Command cmd("createJob", result, arg);
+  cmd.check_argc_min(1);
+  cmd.check_arg(0, STRING_CMD, COMMAND,
+    "job name must be a string or quote expression");
+  if (cmd.ok()) {
+    if (cmd.test_arg(0, STRING_CMD)) {
+      ProcJob *job = new ProcJob((char *)(cmd.arg(0)));
+      for (leftv a = arg->next; a != NULL; a = a->next) {
+        job->args.push_back(LinTree::to_string(a));
+      }
+      cmd.set_result(type_job, new_shared(job));
+    } else {
+      cmd.check_argc(1);
+      Job *job = new EvalJob();
+      job->args.push_back(LinTree::to_string(arg));
+      cmd.set_result(type_job, new_shared(job));
+    }
+  }
+  return cmd.status();
+}
+
+static BOOLEAN startJob(leftv result, leftv arg) {
+  Command cmd("startJob", result, arg);
+  cmd.check_argc_min(2);
+  cmd.check_arg(0, type_threadpool, "first argument must be a threadpool");
+  cmd.check_init(0, "threadpool not initialized");
+  cmd.check_arg(1, type_job, STRING_CMD, "second argument must be a job");
+  if (cmd.ok() && cmd.argtype(1) == type_job)
+    cmd.check_init(1, "job not initialized");
+  if (!cmd.ok()) return cmd.status();
+  ThreadPool *pool = *(ThreadPool **) cmd.arg(0);
+  Job *job;
+  if (cmd.argtype(1) == type_job) 
+    job = *(Job **)(cmd.arg(1));
+  else
+    job = new ProcJob((char *)(cmd.arg(1)));
+  for (leftv a = arg->next->next; a != NULL; a = a->next) {
+    job->args.push_back(LinTree::to_string(a));
+  }
+  if (job->pool)
+    cmd.report("job has already been scheduled");
+  else
+    pool->attachJob(job);
+  cmd.set_result(type_job, new_shared(job));
+  return cmd.status();
+}
+
+static BOOLEAN waitJob(leftv result, leftv arg) {
+  Command cmd("waitJob", result, arg);
+  cmd.check_argc(1);
+  cmd.check_arg(0, type_job, "argument must be a job");
+  cmd.check_init(0, "job not initialized");
+  if (cmd.ok()) {
+    Job *job = *(Job **)(cmd.arg(0));
+    ThreadPool *pool = job->pool;
+    if (!pool) {
+      cmd.report("job has not yet been started");
+      return cmd.status();
+    }
+    pool->waitJob(job);
+    if (job->result.size() == 0)
+      cmd.no_result();
+    else {
+      leftv res = LinTree::from_string(job->result);
+      cmd.set_result(res->Typ(), res->Data());
+    }
+  }
+  return cmd.status();
+}
+
+static BOOLEAN scheduleJob(leftv result, leftv arg) {
+  vector<Job *> jobs;
+  vector<Job *> deps;
+  Command cmd("scheduleJob", result, arg);
+  cmd.check_argc_min(2);
+  cmd.check_arg(0, type_threadpool, "first argument must be a threadpool");
+  cmd.check_init(0, "threadpool not initialized");
+  ThreadPool *pool = *(ThreadPool **) cmd.arg(0);
+  if (cmd.test_arg(1, type_job)) {
+    jobs.push_back(*(Job **)(cmd.arg(1)));
+  } else if (cmd.test_arg(1, STRING_CMD)) {
+    jobs.push_back(new ProcJob((char *)(cmd.arg(1))));
+  }
+  bool error = false;
+  for (leftv a = arg->next->next; !error && a; a = a->next) {
+    if (a->Typ() == type_job) {
+      deps.push_back(*(Job **)(a->Data()));
+    } else if (a->Typ() == LIST_CMD) {
+      lists l = (lists) a->Data();
+      int n = lSize(l);
+      for (int i = 0; i < n; i++) {
+        if (l->m[i].Typ() == type_job) {
+          deps.push_back(*(Job **)(l->m[i].Data()));
+        } else {
+          error = true;
+          break;
+        }
+      }
+    }
+  }
+  if (error) {
+    cmd.report("illegal dependency");
+    return cmd.status();
+  }
+  for (int i = 0; i < jobs.size(); i++) {
+    Job *job = jobs[i];
+    if (job->pool) {
+      cmd.report("job has already been scheduled");
+      return cmd.status();
+    }
+  }
+  for (int i = 0; i < deps.size(); i++) {
+    Job *job = deps[i];
+    if (!job->pool) {
+      cmd.report("dependency has not yet been scheduled");
+      return cmd.status();
+    }
+    if (job->pool != pool) {
+      cmd.report("dependency has been scheduled on a different threadpool");
+      return cmd.status();
+    }
+  }
+  for (int i = 0; i < jobs.size(); i++) {
+    jobs[i]->addDep(deps);
+  }
+  for (int i = 0; i < deps.size(); i++) {
+    deps[i]->addNotify(jobs);
+  }
+  for (int i = 0; i < jobs.size(); i++) {
+    pool->attachJob(jobs[i]);
+  }
+  if (jobs.size() > 0)
+    cmd.set_result(type_job, new_shared(jobs[0]));
+  return cmd.status();
+}
+
+BOOLEAN currentJob(leftv result, leftv arg) {
+  Command cmd("currentJob", result, arg);
+  cmd.check_argc(0);
+  Job *job = currentJobRef;
+  if (job) {
+    cmd.set_result(type_job, new_shared(job));
+  } else {
+    cmd.report("no current job");
+  }
   return cmd.status();
 }
 
@@ -1702,6 +2014,21 @@ BOOLEAN threadExec(leftv result, leftv arg) {
   return FALSE;
 }
 
+BOOLEAN threadPoolExec(leftv result, leftv arg) {
+  Command cmd("threadPoolExec", result, arg);
+  cmd.check_argc(2);
+  cmd.check_arg(0, type_threadpool, "first argument must be a threadpool");
+  cmd.check_init(0, "threadpool not initialized");
+  if (cmd.ok()) {
+    ThreadPool *pool = *(ThreadPool **) (cmd.arg(0));
+    string expr = LinTree::to_string(arg->next);
+    Job* job = new ExecJob();
+    job->args.push_back(expr);
+    pool->broadcastJob(job);
+  }
+  return cmd.status();
+}
+
 BOOLEAN threadResult(leftv result, leftv arg) {
   if (wrong_num_args("threadResult", arg, 1))
     return TRUE;
@@ -1750,6 +2077,9 @@ extern "C" int mod_init(SModulFunctions *fn)
   makeSharedType(type_syncvar, "syncvar");
   makeSharedType(type_region, "region");
   makeSharedType(type_thread, "thread");
+  makeSharedType(type_threadpool, "threadpool");
+  makeSharedType(type_job, "job");
+  makeSharedType(type_trigger, "trigger");
   makeRegionlockType(type_regionlock, "regionlock");
 
   fn->iiAddCproc(libname, "putTable", FALSE, putTable);
@@ -1782,18 +2112,21 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "joinThread", FALSE, joinThread);
   fn->iiAddCproc(libname, "createThreadPool", FALSE, createThreadPool);
   fn->iiAddCproc(libname, "closeThreadPool", FALSE, closeThreadPool);
+  fn->iiAddCproc(libname, "currentThreadPool", FALSE, currentThreadPool);
+  fn->iiAddCproc(libname, "threadPoolExec", FALSE, threadPoolExec);
   fn->iiAddCproc(libname, "threadID", FALSE, threadID);
   fn->iiAddCproc(libname, "mainThread", FALSE, mainThread);
   fn->iiAddCproc(libname, "threadEval", FALSE, threadEval);
   fn->iiAddCproc(libname, "threadExec", FALSE, threadExec);
   fn->iiAddCproc(libname, "threadResult", FALSE, threadResult);
-  // fn->iiAddCproc(libname, "createJob", FALSE, createJob);
+  fn->iiAddCproc(libname, "createJob", FALSE, createJob);
+  fn->iiAddCproc(libname, "currentJob", FALSE, currentJob);
   // fn->iiAddCproc(libname, "nameJob", FALSE, nameJob);
   // fn->iiAddCproc(libname, "getJobName", FALSE, getJobName);
-  // fn->iiAddCproc(libname, "startJob", FALSE, startJob);
-  // fn->iiAddCproc(libname, "waitJob", FALSE, startJob);
-  // fn->iiAddCproc(libname, "scheduleJob", FALSE, scheduleJob);
-  // fn->iiAddCproc(libname, "scheduleJobs", FALSE, scheduleJob);
+  fn->iiAddCproc(libname, "startJob", FALSE, startJob);
+  fn->iiAddCproc(libname, "waitJob", FALSE, waitJob);
+  fn->iiAddCproc(libname, "scheduleJob", FALSE, scheduleJob);
+  fn->iiAddCproc(libname, "scheduleJobs", FALSE, scheduleJob);
   // fn->iiAddCproc(libname, "createTrigger", FALSE, createTrigger);
   // fn->iiAddCproc(libname, "activateTrigger", FALSE, activateTrigger);
 
