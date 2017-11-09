@@ -159,7 +159,7 @@ void ref_none(LinTree &lintree, int by) {
 // INT_CMD
 
 void encode_int(LinTree &lintree, leftv val) {
-  long data = (long)(val->data);
+  long data = (long)(val->Data());
   lintree.put(data);
 }
 
@@ -175,7 +175,7 @@ void ref_int(LinTree &lintree, int by) {
 // STRING_CMD
 
 void encode_string(LinTree &lintree, leftv val) {
-  char *p = (char *)val->data;
+  char *p = (char *)val->Data();
   size_t len = strlen(p);
   lintree.put(len);
   lintree.put_bytes(p, len);
@@ -322,9 +322,8 @@ void encode_number(LinTree &lintree, leftv val) {
     ((ring) lintree.get_last_ring())->cf);
 }
 
-void ref_number(LinTree &lintree, int by) {
+void ref_number_cf(LinTree &lintree, coeffs cf, int by) {
   void ref_poly(LinTree &lintree, int by);
-  coeffs cf = ((ring) lintree.get_last_ring())->cf;
   switch (getCoeffType(cf)) {
     case n_transExt:
       ref_poly(lintree, by);
@@ -340,6 +339,26 @@ void ref_number(LinTree &lintree, int by) {
       abort(); // should never happen
       break;
   }
+}
+
+void ref_number(LinTree &lintree, int by) {
+  coeffs cf = ((ring) lintree.get_last_ring())->cf;
+  ref_number_cf(lintree, cf, by);
+}
+
+// BIGINT_CMD
+
+void encode_bigint(LinTree &lintree, leftv val) {
+  encode_number_cf(lintree, (number) val->Data(), coeffs_BIGINT);
+}
+
+leftv decode_bigint(LinTree &lintree) {
+  return new_leftv(BIGINT_CMD,
+    decode_number_cf(lintree, coeffs_BIGINT));
+}
+
+void ref_bigint(LinTree &lintree, int by) {
+  ref_number_cf(lintree, coeffs_BIGINT, by);
 }
 
 // INTMAT_CMD
@@ -850,6 +869,7 @@ void init() {
   install(COMMAND, encode_command, decode_command, ref_command);
   install(DEF_CMD, encode_def, decode_def, ref_def);
   install(NUMBER_CMD, encode_number, decode_number, ref_number);
+  install(BIGINT_CMD, encode_bigint, decode_bigint, ref_bigint);
   install(INTMAT_CMD, encode_intmat, decode_intmat, ref_intmat);
   set_needs_ring(NUMBER_CMD);
   install(RING_CMD, encode_ring, decode_ring, ref_ring);

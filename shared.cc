@@ -130,6 +130,10 @@ public:
     }
     return error != NULL;
   }
+  BOOLEAN abort(const char *err) {
+    report(err);
+    return status();
+  }
 };
 
 class SharedObject {
@@ -1521,6 +1525,7 @@ public:
     acquireShared(job);
     if (job->ready()) {
       global_queue.push(job);
+      cond.signal();
     }
     else if (job->pending_index < 0) {
       job->pool = this;
@@ -1601,15 +1606,18 @@ public:
     ConditionVariable &response = pool->response;
     JobQueue *my_queue = pool->thread_queues[info->num];
     thread_init();
-    pool->lock.lock();
+    lock.lock();
     for (;;) {
       if (pool->shutting_down) {
+        pool->shutdown_counter++;
         pool->response.signal();
 	break;
       }
       if (!my_queue->empty()) {
        Job *job = my_queue->front();
        my_queue->pop();
+       if (!pool->global_queue.empty())
+         cond.signal();
        lock.unlock();
        currentJobRef = job;
        job->execute();
@@ -1621,9 +1629,12 @@ public:
        releaseShared(job);
        pool->response.signal();
        lock.lock();
+       continue;
       } else if (!pool->global_queue.empty()) {
        Job *job = pool->global_queue.front();
        pool->global_queue.pop();
+       if (!pool->global_queue.empty())
+         cond.signal();
        lock.unlock();
        currentJobRef = job;
        job->execute();
@@ -1633,6 +1644,7 @@ public:
        releaseShared(job);
        pool->response.signal();
        lock.lock();
+       continue;
       } else {
         if (pool->single_threaded) {
           break;
@@ -1873,6 +1885,21 @@ static BOOLEAN scheduleJob(leftv result, leftv arg) {
     jobs.push_back(*(Job **)(cmd.arg(1)));
   } else if (cmd.test_arg(1, STRING_CMD)) {
     jobs.push_back(new ProcJob((char *)(cmd.arg(1))));
+  } else if (cmd.test_arg(1, LIST_CMD)) {
+    lists l = (lists) (cmd.arg(1));
+    int n = lSize(l);
+    for (int i = 0; i < n; i++) {
+      if (l->m[i].Typ() != type_job)
+        return cmd.abort("second argument must be a job, string, or list of jobs");
+    }
+    for (int i = 0; i < n; i++) {
+      Job *job = *(Job **) (l->m[i].Data());
+      if (!job)
+        return cmd.abort("job not initialized");
+      jobs.push_back(job);
+    }
+  } else {
+    return cmd.abort("second argument must be a job, string, or list of jobs");
   }
   bool error = false;
   for (leftv a = arg->next->next; !error && a; a = a->next) {
