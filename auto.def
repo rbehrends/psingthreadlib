@@ -8,6 +8,7 @@ source autoutil.tcl
 
 options {
   singular:.. => "path to singular directory"
+  threads=1 => "disable thread support"
   location:system => {
       If and where to install the Singular thread bindings.
 
@@ -65,4 +66,13 @@ set sing_libs ""
 define SING_INCLUDES [-I {*}$sing_includes]
 define SING_LIBS $sing_libs
 
+if {[opt-bool threads] && [file exists "$SINGULAR/factory/prelude.h"]} {
+  msg-result "Enabling thread support"
+  define ENABLE_THREADS 1
+} else {
+  msg-result "Disabling thread support"
+  define ENABLE_THREADS 0
+}
+
+make-config-header threadconf.h -auto {ENABLE_*}
 make-template Makefile.in

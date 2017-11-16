@@ -1,4 +1,9 @@
+#include "threadconf.h"
+#ifdef ENABLE_THREADS
 #include <factory/prelude.h>
+#else
+#define SIMPLE_THREAD_VAR
+#endif
 #include <iostream>
 #include "kernel/mod2.h"
 #include "Singular/ipid.h"
@@ -26,6 +31,12 @@ using namespace std;
 extern char *global_argv0;
 
 namespace LibThread {
+
+#ifdef ENABLE_THREADS
+const int have_threads = 1;
+#else
+const int have_threads = 0;
+#endif
 
 class Command {
 private:
@@ -1361,6 +1372,8 @@ static BOOLEAN createThread(leftv result, leftv arg) {
   Command cmd("createThread", result, arg);
   cmd.check_argc(0);
   const char *error;
+  if (!have_threads)
+    cmd.report("thread support not available");
   if (!cmd.ok()) return cmd.status();
   InterpreterThread *thread = createInterpreterThread(&error);
   if (error) {
@@ -1682,6 +1695,8 @@ static BOOLEAN createThreadPool(leftv result, leftv arg) {
     n = (long) cmd.arg(0);
     if (n < 0) cmd.report("number of threads must be non-negative");
     else if (n >= 256) cmd.report("number of threads too large");
+    if (!have_threads && n != 0)
+      cmd.report("in single-threaded mode, number of threads must be zero");
   }
   if (cmd.ok()) {
     ThreadPool *pool = new ThreadPool((int) n);

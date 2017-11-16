@@ -1,4 +1,7 @@
+#include "threadconf.h"
+#ifdef ENABLE_THREADS
 #include <factory/prelude.h>
+#endif
 #include <list>
 #include <vector>
 
