@@ -2067,14 +2067,21 @@ static BOOLEAN scheduleJob(leftv result, leftv arg) {
     }
   }
   pool->lock.lock();
+  bool cancelled = false;
   for (int i = 0; i < jobs.size(); i++) {
     jobs[i]->addDep(deps);
+    cancelled |= jobs[i]->cancelled;
   }
   for (int i = 0; i < deps.size(); i++) {
     deps[i]->addNotify(jobs);
   }
   for (int i = 0; i < jobs.size(); i++) {
-    pool->attachJob(jobs[i]);
+    if (cancelled) {
+      jobs[i]->pool = pool;
+      pool->cancelJob(jobs[i]);
+    }
+    else
+      pool->attachJob(jobs[i]);
   }
   pool->lock.unlock();
   if (jobs.size() > 0)
