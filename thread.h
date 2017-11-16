@@ -20,34 +20,53 @@ private:
   friend class ConditionVariable;
   Thread owner;
   int locked;
-  void set_owner() {
+  bool recursive;
+  void resume_lock(int l) {
     owner = pthread_self();
-    locked = 1;
+    locked = l;
+  }
+  int break_lock() {
+    extern pthread_t no_thread;
+    int result = locked;
+    owner = no_thread;
+    locked = 0;
+    return result;
   }
 public:
-  Lock() {
+  Lock(bool rec = false) {
+    extern pthread_t no_thread;
     pthread_mutex_init(&mutex, NULL);
     locked = 0;
+    recursive = rec;
+    owner = no_thread;
   }
   ~Lock() {
     pthread_mutex_destroy(&mutex);
   }
   void lock() {
     Thread self = pthread_self();
-    if (locked && owner == self)
-      ThreadError("locking mutex twice");
-    pthread_mutex_lock(&mutex);
-    locked = 1;
+    if (owner == self) {
+      if (locked && !recursive)
+	ThreadError("locking mutex twice");
+    }
+    else
+      pthread_mutex_lock(&mutex);
     owner = self;
+    locked++;
   }
   void unlock() {
-    if (owner != pthread_self())
+    extern pthread_t no_thread;
+    Thread self = pthread_self();
+    if (owner != self)
       ThreadError("unlocking unowned lock");
-    locked = 0;
-    pthread_mutex_unlock(&mutex);
+    locked--;
+    if (locked == 0) {
+      owner = no_thread;
+      pthread_mutex_unlock(&mutex);
+    }
   }
-  int is_locked() {
-    return locked && owner == pthread_self();
+  bool is_locked() {
+    return locked != 0 && owner == pthread_self();
   }
 };
 
@@ -56,11 +75,11 @@ class ConditionVariable {
 private:
   pthread_cond_t condition;
   Lock *lock;
+  int waiting;
   friend class Semaphore;
   ConditionVariable() { }
 public:
-  ConditionVariable(Lock *lock0) {
-    lock = lock0;
+  ConditionVariable(Lock *lock_init) : waiting(0), lock(lock_init) {
     pthread_cond_init(&condition, NULL);
   }
   ~ConditionVariable() {
@@ -69,20 +88,23 @@ public:
   void wait() {
     if (!lock->is_locked())
       ThreadError("waited on condition without locked mutex");
+    waiting++;
+    int l = lock->break_lock();
     pthread_cond_wait(&condition, &lock->mutex);
-    lock->set_owner();
+    waiting--;
+    lock->resume_lock(l);
   }
   void signal() {
-    /*
     if (!lock->is_locked())
       ThreadError("signaled condition without locked mutex");
-    */
-    pthread_cond_signal(&condition);
+    if (waiting)
+      pthread_cond_signal(&condition);
   }
   void broadcast() {
     if (!lock->is_locked())
       ThreadError("signaled condition without locked mutex");
-    pthread_cond_broadcast(&condition);
+    if (waiting)
+      pthread_cond_broadcast(&condition);
   }
 };
 

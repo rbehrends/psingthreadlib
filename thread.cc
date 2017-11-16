@@ -13,6 +13,8 @@
 
 using namespace std;
 
+pthread_t no_thread;
+
 void ThreadError(const char *message) {
   fprintf(stderr, "FATAL ERROR: %s\n", message);
   abort(); // should not happen
