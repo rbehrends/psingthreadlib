@@ -28,7 +28,9 @@
 
 using namespace std;
 
+#ifdef ENABLE_THREADS
 extern char *global_argv0;
+#endif
 
 namespace LibThread {
 
@@ -1251,8 +1253,10 @@ void thread_init() {
   master_lock.lock();
   thread_id = ++thread_counter;
   master_lock.unlock();
+#ifdef ENABLE_THREADS
   onThreadInit();
   siInit(global_argv0);
+#endif
   setOption('q');
   // setOption('b');
 }
