@@ -1434,9 +1434,10 @@ public:
   bool done;
   bool queued;
   bool running;
+  bool cancelled;
   Job() : SharedObject(), pool(NULL), deps(), pending_index(-1),
-    done(false), running(false), queued(false), result(),
-    args(), notify()
+    done(false), running(false), queued(false), cancelled(false),
+    result(), args(), notify()
   { set_type(type_job); }
   ~Job();
   void addDep(Job *job) {
@@ -1446,6 +1447,7 @@ public:
   void addNotify(vector<Job *> &jobs);
   bool ready();
   virtual void execute() = 0;
+  void run();
 };
 
 bool Job::ready() {
@@ -1582,6 +1584,26 @@ public:
     }
     lock.unlock();
   }
+  void cancelDeps(Job * job) {
+    vector<Job *> &notify = job->notify;
+    for (int i = 0; i <notify.size(); i++) {
+      Job *next = notify[i];
+      if (!next->cancelled) {
+        cancelJob(next);
+      }
+    }
+  }
+  void cancelJob(Job *job) {
+    lock.lock();
+    if (!job->cancelled) {
+      job->cancelled = true;
+      if (!job->running && !job->done) {
+        job->done = true;
+	cancelDeps(job);
+      }
+    }
+    lock.unlock();
+  }
   void waitJob(Job *job) {
     if (single_threaded) {
       PoolInfo *info = new PoolInfo();
@@ -1593,7 +1615,7 @@ public:
     } else {
       lock.lock();
       for (;;) {
-	if (job->done) {
+	if (job->done || job->cancelled) {
 	  break;
 	}
 	response.wait();
@@ -1610,7 +1632,7 @@ public:
     job->incref(notify.size());
     for (int i = 0; i <notify.size(); i++) {
       Job *next = notify[i];
-      if (!next->queued && next->ready()) {
+      if (!next->queued && next->ready() && !next->cancelled) {
         next->queued = true;
         pool->queueJob(next);
       }
@@ -1641,14 +1663,11 @@ public:
        my_queue->pop();
        if (!pool->global_queue.empty())
          cond.signal();
-       lock.unlock();
        currentJobRef = job;
-       job->execute();
+       job->run();
        currentJobRef = NULL;
-       job->done = true;
        notifyDeps(pool, job);
        releaseShared(job);
-       lock.lock();
        pool->response.signal();
        continue;
       } else if (!pool->global_queue.empty()) {
@@ -1656,14 +1675,11 @@ public:
        pool->global_queue.pop();
        if (!pool->global_queue.empty())
          cond.signal();
-       lock.unlock();
        currentJobRef = job;
-       job->execute();
+       job->run();
        currentJobRef = NULL;
-       job->done = true;
        notifyDeps(pool, job);
        releaseShared(job);
-       lock.lock();
        pool->response.signal();
        continue;
       } else {
@@ -1680,14 +1696,27 @@ public:
     return NULL;
   }
 };
+
 void Job::addDep(vector<Job *> &jobs) {
   deps.insert(deps.end(), jobs.begin(), jobs.end());
 }
+
 void Job::addNotify(vector<Job *> &jobs) {
   notify.insert(notify.end(), jobs.begin(), jobs.end());
   if (done) {
     ThreadPool::notifyDeps(pool, this);
   }
+}
+
+void Job::run() {
+  if (!cancelled) {
+    running = true;
+    pool->lock.unlock();
+    execute();
+    pool->lock.lock();
+    running = false;
+  }
+  done = true;
 }
 
 static BOOLEAN createThreadPool(leftv result, leftv arg) {
@@ -1907,12 +1936,57 @@ static BOOLEAN waitJob(leftv result, leftv arg) {
       return cmd.abort("job has not yet been started or scheduled");
     }
     pool->waitJob(job);
+    if (job->cancelled) {
+      return cmd.abort("job has been cancelled");
+    }
     if (job->result.size() == 0)
       cmd.no_result();
     else {
       leftv res = LinTree::from_string(job->result);
       cmd.set_result(res->Typ(), res->Data());
     }
+  }
+  return cmd.status();
+}
+
+static BOOLEAN cancelJob(leftv result, leftv arg) {
+  Command cmd("cancelJob", result, arg);
+  cmd.check_argc(1);
+  cmd.check_arg(0, type_job, "argument must be a job");
+  cmd.check_init(0, "job not initialized");
+  if (cmd.ok()) {
+    Job *job = cmd.shared_arg<Job>(0);
+    ThreadPool *pool = job->pool;
+    if (!pool) {
+      return cmd.abort("job has not yet been started or scheduled");
+    }
+    pool->cancelJob(job);
+    cmd.no_result();
+  }
+  return cmd.status();
+}
+
+static BOOLEAN jobCancelled(leftv result, leftv arg) {
+  Job *job;
+  Command cmd("jobCancelled", result, arg);
+  cmd.check_argc(0, 1);
+  if (cmd.nargs() == 1) {
+    cmd.check_arg(0, type_job, "argument must be a job");
+    cmd.check_init(0, "job not initialized");
+    job = cmd.shared_arg<Job>(0);
+  } else {
+    job = currentJobRef;
+    if (!job)
+      cmd.report("no current job");
+  }
+  if (cmd.ok()) {
+    ThreadPool *pool = job->pool;
+    if (!pool) {
+      return cmd.abort("job has not yet been started or scheduled");
+    }
+    pool->lock.lock();
+    cmd.set_result((long) job->cancelled);
+    pool->lock.unlock();
   }
   return cmd.status();
 }
@@ -2113,6 +2187,7 @@ BOOLEAN threadPoolExec(leftv result, leftv arg) {
     string expr = LinTree::to_string(has_pool ? arg->next : arg);
     Job* job = new ExecJob();
     job->args.push_back(expr);
+    job->pool = pool;
     pool->broadcastJob(job);
   }
   return cmd.status();
@@ -2215,6 +2290,8 @@ extern "C" int mod_init(SModulFunctions *fn)
   // fn->iiAddCproc(libname, "getJobName", FALSE, getJobName);
   fn->iiAddCproc(libname, "startJob", FALSE, startJob);
   fn->iiAddCproc(libname, "waitJob", FALSE, waitJob);
+  fn->iiAddCproc(libname, "cancelJob", FALSE, cancelJob);
+  fn->iiAddCproc(libname, "jobCancelled", FALSE, jobCancelled);
   fn->iiAddCproc(libname, "scheduleJob", FALSE, scheduleJob);
   fn->iiAddCproc(libname, "scheduleJobs", FALSE, scheduleJob);
   // fn->iiAddCproc(libname, "createTrigger", FALSE, createTrigger);
