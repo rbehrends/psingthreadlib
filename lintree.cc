@@ -882,11 +882,22 @@ void init() {
   set_needs_ring(IDEAL_CMD);
 }
 
-LinTree::LinTree() : cursor(0), memory(), error(NULL), last_ring(NULL) {
+LinTree::LinTree() : cursor(0), memory(*new string()), error(NULL), last_ring(NULL) {
+}
+
+LinTree::LinTree(const LinTree &other) : cursor(0), memory(*new string(other.memory)), error(NULL), last_ring(NULL) {
+}
+
+LinTree& LinTree::operator =(const LinTree &other) {
+  cursor = other.cursor;
+  memory = *new string(other.memory);
+  error = NULL;
+  last_ring = NULL;
+  return *this;
 }
 
 LinTree::LinTree(std::string &source) :
-  cursor(0), memory(source), error(NULL), last_ring(NULL) {
+  cursor(0), memory(*new string(source)), error(NULL), last_ring(NULL) {
 }
 
 void LinTree::set_last_ring(void *r) {

@@ -23,14 +23,16 @@ void install(int typ, LinTreeEncodeFunc enc, LinTreeDecodeFunc dec,
 
 class LinTree {
 private:
-  std::string memory;
+  std::string &memory;
   size_t cursor;
   const char * error;
   void *last_ring;
 public:
   LinTree();
+  LinTree(const LinTree &other);
   ~LinTree();
   LinTree(std::string &source);
+  LinTree& operator=(const LinTree &other);
   void rewind() { cursor = 0; }
   void clear() { memory.clear(); cursor = 0; error = NULL; last_ring = NULL; }
   void mark_error(const char *s) {
