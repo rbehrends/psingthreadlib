@@ -21,13 +21,13 @@ private:
 public:
   ByteBuf() : pos(0), count(0), cap(0) { }
   ByteBuf(const ByteBuf &other) :
-    count(other.end), cap(other.cap), pos(0)
+    count(other.count), cap(other.cap), pos(0)
   {
     buf = allocate_space(cap);
     memcpy(buf, other.buf, count);
   }
   ByteBuf &operator=(const ByteBuf &other) {
-    count = other.end;
+    count = other.count;
     cap = other.cap;
     pos = 0;
     buf = allocate_space(cap);

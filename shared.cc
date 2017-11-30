@@ -21,6 +21,7 @@
 #include <map>
 #include <iterator>
 #include <queue>
+#include <assert.h>
 #include "thread.h"
 #include "lintree.h"
 
@@ -1429,12 +1430,7 @@ static BOOLEAN joinThread(leftv result, leftv arg) {
 
 class ThreadPool;
 
-class Dependency : public SharedObject {
-public:
-  Dependency() : SharedObject() {}
-};
-
-class Job : public Dependency {
+class Job : public SharedObject {
 public:
   ThreadPool *pool;
   long pending_index;
@@ -1443,11 +1439,12 @@ public:
   vector<string> args;
   string result; // lintree-encoded
   void *data;
+  bool fast;
   bool done;
   bool queued;
   bool running;
   bool cancelled;
-  Job() : Dependency(), pool(NULL), deps(), pending_index(-1),
+  Job() : SharedObject(), pool(NULL), deps(), pending_index(-1), fast(false),
     done(false), running(false), queued(false), cancelled(false), data(NULL),
     result(), args(), notify()
   { set_type(type_job); }
@@ -1459,21 +1456,16 @@ public:
   void addDep(long ndeps, Job **jobs);
   void addNotify(vector<Job *> &jobs);
   void addNotify(Job *job);
-  bool ready();
+  virtual bool ready();
   virtual void execute() = 0;
   void run();
 };
 
-class Trigger : public Dependency {
+class Trigger : public Job {
 public:
-  ThreadPool *pool;
-  vector<Job *> notify;
-  vector<string> args;
-  virtual bool ready();
-  virtual bool accept(leftv arg);
-  virtual void activate(leftv arg);
-  void notifyDeps();
-  Trigger() : Dependency(), pool(NULL), notify(), args() {}
+  virtual bool accept(leftv arg) = 0;
+  virtual void activate(leftv arg) = 0;
+  Trigger() : Job() { set_type(type_trigger); fast = true; }
 };
 
 class AccTrigger : public Trigger {
@@ -1483,18 +1475,35 @@ public:
   AccTrigger(long count_init): Trigger(), count(count_init) {
   }
   virtual bool ready() {
+    if (!Trigger::ready()) return false;
     return args.size() >= count;
   }
   virtual bool accept(leftv arg) {
     return true;
   }
   virtual void activate(leftv arg) {
-    if (!ready()) {
+    while (arg != NULL && !ready()) {
       args.push_back(LinTree::to_string(arg));
       if (ready()) {
-        notifyDeps();
+	return;
       }
+      arg = arg->next;
     }
+  }
+  virtual void execute() {
+    lists l = (lists) omAlloc0Bin(slists_bin);
+    l->Init(args.size());
+    for (int i = 0; i < args.size(); i++) {
+      leftv val = LinTree::from_string(args[i]);
+      memcpy(&l->m[i], val, sizeof(*val));
+      omFreeBin(val, sleftv_bin);
+    }
+    sleftv val;
+    memset(&val, 0, sizeof(val));
+    val.rtyp = LIST_CMD;
+    val.data = l;
+    result = LinTree::to_string(&val);
+    // val.CleanUp();
   }
 };
 
@@ -1505,6 +1514,7 @@ public:
   CountTrigger(long count_init): Trigger(), count(count_init) {
   }
   virtual bool ready() {
+    if (!Trigger::ready()) return false;
     return count <= 0;
   }
   virtual bool accept(leftv arg) {
@@ -1513,10 +1523,10 @@ public:
   virtual void activate(leftv arg) {
     if (!ready()) {
       count--;
-      if (ready()) {
-        notifyDeps();
-      }
     }
+  }
+  virtual void execute() {
+    // do nothing
   }
 };
 
@@ -1529,6 +1539,7 @@ public:
     set(count_init) {
   }
   virtual bool ready() {
+    if (!Trigger::ready()) return false;
     return count == set.size();
   }
   virtual bool accept(leftv arg) {
@@ -1541,21 +1552,20 @@ public:
       if (set[value]) return;
       set[value] = true;
       count++;
-      if (ready()) {
-        notifyDeps();
-      }
     }
+  }
+  virtual void execute() {
+    // do nothing
   }
 };
 
 
 bool Job::ready() {
-  bool result = true;
   vector<Job *>::iterator it;
   for (it = deps.begin(); it != deps.end(); it++) {
-    result &= (*it)->done;
+    if (!(*it)->done) return false;
   }
-  return result;
+  return true;
 }
 
 Job::~Job() {
@@ -1583,7 +1593,7 @@ private:
   bool shutting_down;
   int shutdown_counter;
   vector<ThreadState *> threads;
-  JobQueue global_queue;
+  deque<Job *> global_queue;
   vector<JobQueue *> thread_queues;
   vector<Job *> pending;
   ConditionVariable cond;
@@ -1646,7 +1656,10 @@ public:
     job->pool = this;
     acquireShared(job);
     if (job->ready()) {
-      global_queue.push(job);
+      if (job->fast)
+	global_queue.push_front(job);
+      else
+	global_queue.push_back(job);
       cond.signal();
     }
     else if (job->pending_index < 0) {
@@ -1669,9 +1682,11 @@ public:
     lock.unlock();
   }
   void queueJob(Job *job) {
-    // assumes that job is already locked
     lock.lock();
-    global_queue.push(job);
+    if (job->fast)
+      global_queue.push_front(job);
+    else
+      global_queue.push_back(job);
     cond.signal();
     lock.unlock();
   }
@@ -1737,17 +1752,6 @@ public:
       }
     }
   }
-  static void notifyDeps(ThreadPool *pool, Trigger *trigger) {
-    vector<Job *> &notify = trigger->notify;
-    trigger->incref(notify.size());
-    for (int i = 0; i <notify.size(); i++) {
-      Job *next = notify[i];
-      if (!next->queued && next->ready() && !next->cancelled) {
-        next->queued = true;
-        pool->queueJob(next);
-      }
-    }
-  }
   static void *main(ThreadState *ts, void *arg) {
     PoolInfo *info = (PoolInfo *) arg;
     ThreadPool *pool = info->pool;
@@ -1782,7 +1786,7 @@ public:
        continue;
       } else if (!pool->global_queue.empty()) {
        Job *job = pool->global_queue.front();
-       pool->global_queue.pop();
+       pool->global_queue.pop_front();
        if (!pool->global_queue.empty())
          cond.signal();
        currentJobRef = job;
@@ -1830,7 +1834,6 @@ void Job::addNotify(Job *job) {
     ThreadPool::notifyDeps(pool, this);
   }
 }
-
 
 void Job::run() {
   if (!cancelled) {
@@ -1960,7 +1963,7 @@ public:
   EvalJob() : Job() { }
   virtual void execute() {
     leftv val = LinTree::from_string(args[0]);
-    result = LinTree::to_string(val);
+    result = (LinTree::to_string(val));
     val->CleanUp();
     omFreeBin(val, sleftv_bin);
   }
@@ -2020,8 +2023,8 @@ public:
       Werror("job execution: procedure call of \"%s\" failed", procname.c_str());
       return;
     }
-    result = LinTree::to_string(&val);
-    // val.CleanUp();
+    result = (LinTree::to_string(&val));
+    val.CleanUp();
   }
 };
 
@@ -2058,8 +2061,8 @@ public:
       *tail = NULL;
     }
     cfunc(&val, argv[0]);
-    result = LinTree::to_string(&val);
-    // val.CleanUp();
+    result = (LinTree::to_string(&val));
+    val.CleanUp();
   }
 };
 
@@ -2214,6 +2217,11 @@ static BOOLEAN waitJob(leftv result, leftv arg) {
   return cmd.status();
 }
 
+void waitJob(Job *job) {
+  assert(job->pool != NULL);
+  job->pool->waitJob(job);
+}
+
 static BOOLEAN cancelJob(leftv result, leftv arg) {
   Command cmd("cancelJob", result, arg);
   cmd.check_argc(1);
@@ -2311,6 +2319,73 @@ void setJobName(Job *job, const char *name) {
   // TODO
 }
 
+static BOOLEAN createTrigger(leftv result, leftv arg) {
+  Command cmd("createTrigger", result, arg);
+  cmd.check_argc_min(1);
+  int has_pool = cmd.test_arg(0, type_threadpool);
+  ThreadPool *pool;
+  if (has_pool) {
+    cmd.check_init(0, "threadpool not initialized");
+    pool = cmd.shared_arg<ThreadPool>(0);
+  } else {
+    pool = currentThreadPoolRef;
+    if (!pool)
+      return cmd.abort("no default threadpool");
+  }
+  cmd.check_argc(has_pool + 2);
+  cmd.check_arg(has_pool + 0, STRING_CMD, "trigger subtype must be a string");
+  cmd.check_arg(has_pool + 1, INT_CMD, "trigger argument must be an integer");
+  if (cmd.ok()) {
+    Trigger *trigger;
+    const char *kind = (const char *)(cmd.arg(has_pool + 0));
+    long n = (long) (cmd.arg(has_pool + 1));
+    if (n < 0)
+      return cmd.abort("trigger argument must be a non-negative integer");
+    if (0 == strcmp(kind, "acc")) {
+      trigger = new AccTrigger(n);
+    } else if (0 == strcmp(kind, "count")) {
+      trigger = new CountTrigger(n);
+    } else if (0 == strcmp(kind, "set")) {
+      trigger = new SetTrigger(n);
+    } else {
+      return cmd.abort("unknown trigger subtype");
+    }
+    pool->attachJob(trigger);
+    cmd.set_result(type_trigger, new_shared(trigger));
+  }
+  return cmd.status();
+}
+
+static BOOLEAN updateTrigger(leftv result, leftv arg) {
+  Command cmd("updateTrigger", result, arg);
+  cmd.check_argc_min(1);
+  cmd.check_arg(0, type_trigger, "first argument must be a trigger");
+  cmd.check_init(0, "trigger not initialized");
+  if (cmd.ok()) {
+    Trigger *trigger = cmd.shared_arg<Trigger>(0);
+    trigger->pool->lock.lock();
+    if (!trigger->accept(arg->next))
+      cmd.report("incompatible argument type(s) for this trigger");
+    else {
+      trigger->activate(arg->next);
+      if (trigger->ready()) {
+        trigger->run();
+	ThreadPool::notifyDeps(trigger->pool, trigger);
+      }
+    }
+    trigger->pool->lock.lock();
+  }
+  return cmd.status();
+}
+
+static BOOLEAN chainTrigger(leftv result, leftv arg) {
+  Command cmd("chainTrigger", result, arg);
+  if (cmd.ok()) {
+    return cmd.abort("not yet implemented");
+  }
+  return cmd.status();
+}
+
 
 
 
@@ -2356,13 +2431,13 @@ static BOOLEAN scheduleJob(leftv result, leftv arg) {
   leftv a = arg->next;
   if (has_pool) a = a->next;
   for (; !error && a; a = a->next) {
-    if (a->Typ() == type_job) {
+    if (a->Typ() == type_job || a->Typ() == type_trigger) {
       deps.push_back(*(Job **)(a->Data()));
     } else if (a->Typ() == LIST_CMD) {
       lists l = (lists) a->Data();
       int n = lSize(l);
       for (int i = 0; i < n; i++) {
-        if (l->m[i].Typ() == type_job) {
+        if (l->m[i].Typ() == type_job || l->m[i].Typ() == type_trigger) {
           deps.push_back(*(Job **)(l->m[i].Data()));
         } else {
           error = true;
@@ -2627,8 +2702,9 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "jobCancelled", FALSE, jobCancelled);
   fn->iiAddCproc(libname, "scheduleJob", FALSE, scheduleJob);
   fn->iiAddCproc(libname, "scheduleJobs", FALSE, scheduleJob);
-  // fn->iiAddCproc(libname, "createTrigger", FALSE, createTrigger);
-  // fn->iiAddCproc(libname, "activateTrigger", FALSE, activateTrigger);
+  fn->iiAddCproc(libname, "createTrigger", FALSE, createTrigger);
+  fn->iiAddCproc(libname, "updateTrigger", FALSE, updateTrigger);
+  fn->iiAddCproc(libname, "chainTrigger", FALSE, updateTrigger);
 
   LinTree::init();
   master_lock.unlock();
