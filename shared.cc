@@ -1429,6 +1429,7 @@ static BOOLEAN joinThread(leftv result, leftv arg) {
 }
 
 class ThreadPool;
+class Trigger;
 
 class Job : public SharedObject {
 public:
@@ -1436,6 +1437,7 @@ public:
   long pending_index;
   vector<Job *> deps;
   vector<Job *> notify;
+  vector<Trigger *> triggers;
   vector<string> args;
   string result; // lintree-encoded
   void *data;
@@ -1446,7 +1448,7 @@ public:
   bool cancelled;
   Job() : SharedObject(), pool(NULL), deps(), pending_index(-1), fast(false),
     done(false), running(false), queued(false), cancelled(false), data(NULL),
-    result(), args(), notify()
+    result(), args(), notify(), triggers()
   { set_type(type_job); }
   ~Job();
   void addDep(Job *job) {
@@ -1750,6 +1752,22 @@ public:
         next->queued = true;
         pool->queueJob(next);
       }
+    }
+    vector<Trigger *> &triggers = job->triggers;
+    leftv arg = NULL;
+    if (triggers.size() > 0 && job->result.size() > 0)
+      arg = LinTree::from_string(job->result);
+    for (int i = 0; i < triggers.size(); i++) {
+      Trigger *trigger = triggers[i];
+      if (trigger->accept(arg)) {
+        trigger->activate(arg);
+	if (trigger->ready())
+	   pool->queueJob(trigger);
+      }
+    }
+    if (arg) {
+      arg->CleanUp();
+      omFreeBin(arg, sleftv_bin);
     }
   }
   static void *main(ThreadState *ts, void *arg) {
@@ -2380,8 +2398,21 @@ static BOOLEAN updateTrigger(leftv result, leftv arg) {
 
 static BOOLEAN chainTrigger(leftv result, leftv arg) {
   Command cmd("chainTrigger", result, arg);
+  cmd.check_argc(2);
+  cmd.check_arg(0, type_trigger, "first argument must be a trigger");
+  cmd.check_arg(1, type_trigger, type_job,
+    "second argument must be a trigger or job");
+  cmd.check_init(0, "trigger not initialized");
+  cmd.check_init(1, "trigger/job not initialized");
   if (cmd.ok()) {
-    return cmd.abort("not yet implemented");
+    Trigger *trigger = cmd.shared_arg<Trigger>(0);
+    Job *job = cmd.shared_arg<Job>(1);
+    if (trigger->pool != job->pool)
+      return cmd.abort("arguments use different threadpools");
+    ThreadPool *pool = trigger->pool;
+    pool->lock.lock();
+    job->triggers.push_back(trigger);
+    pool->lock.unlock();
   }
   return cmd.status();
 }
@@ -2704,7 +2735,7 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "scheduleJobs", FALSE, scheduleJob);
   fn->iiAddCproc(libname, "createTrigger", FALSE, createTrigger);
   fn->iiAddCproc(libname, "updateTrigger", FALSE, updateTrigger);
-  fn->iiAddCproc(libname, "chainTrigger", FALSE, updateTrigger);
+  fn->iiAddCproc(libname, "chainTrigger", FALSE, chainTrigger);
 
   LinTree::init();
   master_lock.unlock();
