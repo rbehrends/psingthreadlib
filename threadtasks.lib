@@ -51,7 +51,7 @@ static proc callVarargs(string func, list #) {
 }
 
 proc startWorker(int id) {
-  list job;
+  list jobdata;
   int jobtype;
   string func;
   list args;
@@ -60,14 +60,14 @@ proc startWorker(int id) {
   def result;
   workerID = id;
   while (1) {
-    job = receiveChannel(taskQueue);
-    jobtype = job[1];
+    jobdata = receiveChannel(taskQueue);
+    jobtype = jobdata[1];
     if (jobtype == 0) {
       // execute task
-      func = job[2];
-      args = job[3];
-      source = job[4];
-      remote_id = job[5];
+      func = jobdata[2];
+      args = jobdata[3];
+      source = jobdata[4];
+      remote_id = jobdata[5];
       result = callVarargs(func, args);
       sendChannel(toWorker[source+1], list(remote_id, result));
     } else {

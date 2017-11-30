@@ -229,24 +229,45 @@ Example:
 Triggers allow the programmer to create more complex interactions
 between jobs.
 
-    trigger trig = createTrigger(string type[, def arg1, ..., argn]);
+    trigger trig = createTrigger([threadpool pool,]
+      string type[, def arg1, ..., argn]);
 
-We currently support three types of triggers, accumulators, counters,
-and sets.
+We currently support four types of triggers, accumulators, lists, counters, and
+sets.
 
     trigger trig = createTrigger("acc", int n);
+    trigger trig = createTrigger("list", int n);
     trigger trig = createTrigger("count", int n);
     trigger trig = createTrigger("set", int n);
 
 An accumulator trigger will accumulate a set of results. It will fire
-when `n` results have been added. A counter trigger will simply count
-up and fire when it has been activated `n` times. A set trigger
-represents the set `{1..n}` and will fire when all elements in the
-set have been added at least once.
+when `n` results have been added; any accumulated results will be passed
+as additional arguments to triggered jobs. A list trigger functions like
+an accumulator trigger, except that the results will be passed as a single
+list argument.
 
-Adding to a trigger can be done with `activateTrigger()`.
+A counter trigger will simply count up and fire when it has been activated `n`
+times. A set trigger represents the set `{1..n}` and will fire when all
+elements in the set have been added at least once. Neither of the last
+two will pass any additional arguments to triggered jobs.
 
-    addTrigger(trigger t[, def arg]);
+Adding to a trigger can be done with `updateTrigger()`.
+
+    updateTrigger(trigger trig[, def arg]);
+
+Triggers can also be activated when a job finishes or another trigger
+fires via the `chainTrigger()` function:
+
+    chainTrigger(trigger trig, job|trigger dep);
+
+Because it is often useful to discard any remaining jobs when a trigger
+fires, the `cancelOnTrigger()` function allows to automate this.
+
+    cancelOnTrigger(trigger trig, job|list arg1, ..., job|list argn);
+
+The function takes an arbitrary number of jobs or lists of jobs in addition
+to a trigger argument. When the trigger fires, all those jobs will be
+cancelled if they haven't finished yet.
 
 A simple use of triggers is to wait for the first job in a list to be
 triggered.
