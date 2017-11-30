@@ -232,19 +232,16 @@ between jobs.
     trigger trig = createTrigger([threadpool pool,]
       string type[, def arg1, ..., argn]);
 
-We currently support four types of triggers, accumulators, lists, counters, and
+We currently support three types of triggers, accumulators, counters, and
 sets.
 
     trigger trig = createTrigger("acc", int n);
-    trigger trig = createTrigger("list", int n);
     trigger trig = createTrigger("count", int n);
     trigger trig = createTrigger("set", int n);
 
 An accumulator trigger will accumulate a set of results. It will fire
 when `n` results have been added; any accumulated results will be passed
-as additional arguments to triggered jobs. A list trigger functions like
-an accumulator trigger, except that the results will be passed as a single
-list argument.
+as an additional list argument to triggered jobs.
 
 A counter trigger will simply count up and fire when it has been activated `n`
 times. A set trigger represents the set `{1..n}` and will fire when all
