@@ -229,6 +229,7 @@ public:
 Lock global_objects_lock;
 SharedObjectTable global_objects;
 Lock master_lock(true);
+Lock name_lock(true);
 SIMPLE_THREAD_VAR long thread_id;
 long thread_counter;
 
@@ -604,23 +605,29 @@ char *shared_string(blackbox *b, void *d) {
     return omStrDup(buf);
   }
   else if (type == type_threadpool) {
-    if (name.size() > 0)
+    if (name.size() > 0) {
+      name_lock.lock();
       sprintf(buf, "<threadpool \"%.40s\"@%p>", name.c_str(), obj);
-    else
+      name_lock.unlock();
+    } else
       sprintf(buf, "<threadpool @%p>", obj);
     return omStrDup(buf);
   }
   else if (type == type_job) {
-    if (name.size() > 0)
+    if (name.size() > 0) {
+      name_lock.lock();
       sprintf(buf, "<job \"%.40s\"@%p>", name.c_str(), obj);
-    else
+      name_lock.unlock();
+    } else
       sprintf(buf, "<job @%p>", obj);
     return omStrDup(buf);
   }
   else if (type == type_trigger) {
-    if (name.size() > 0)
+    if (name.size() > 0) {
+      name_lock.lock();
       sprintf(buf, "<trigger \"%.40s\"@%p>", name.c_str(), obj);
-    else
+      name_lock.unlock();
+    } else
       sprintf(buf, "<trigger @%p>", obj);
     return omStrDup(buf);
   } else {
@@ -2684,7 +2691,9 @@ BOOLEAN setSharedName(leftv result, leftv arg) {
   cmd.check_arg(1, STRING_CMD, "second argument must be a string");
   if (cmd.ok()) {
     SharedObject *obj = cmd.shared_arg<SharedObject>(0);
+    name_lock.lock();
     obj->set_name((char *) cmd.arg(1));
+    name_lock.unlock();
   }
   return cmd.status();
 }
@@ -2699,7 +2708,9 @@ BOOLEAN getSharedName(leftv result, leftv arg) {
   }
   if (cmd.ok()) {
     SharedObject *obj = cmd.shared_arg<SharedObject>(0);
+    name_lock.lock();
     cmd.set_result(obj->get_name().c_str());
+    name_lock.unlock();
   }
   return cmd.status();
 }
