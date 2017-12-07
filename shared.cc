@@ -166,6 +166,9 @@ public:
   void set_type(int type_init) { type = type_init; }
   int get_type() { return type; }
   void set_name(std::string &name_init) { name = name_init; }
+  void set_name(const char *s) {
+    name = std::string(s);
+  }
   std::string &get_name() { return name; }
   void incref(int by = 1) {
     lock.lock();
@@ -601,15 +604,24 @@ char *shared_string(blackbox *b, void *d) {
     return omStrDup(buf);
   }
   else if (type == type_threadpool) {
-    sprintf(buf, "<threadpool #%p>", obj);
+    if (name.size() > 0)
+      sprintf(buf, "<threadpool \"%.40s\"@%p>", name.c_str(), obj);
+    else
+      sprintf(buf, "<threadpool @%p>", obj);
     return omStrDup(buf);
   }
   else if (type == type_job) {
-    sprintf(buf, "<job #%p>", obj);
+    if (name.size() > 0)
+      sprintf(buf, "<job \"%.40s\"@%p>", name.c_str(), obj);
+    else
+      sprintf(buf, "<job @%p>", obj);
     return omStrDup(buf);
   }
   else if (type == type_trigger) {
-    sprintf(buf, "<trigger #%p>", obj);
+    if (name.size() > 0)
+      sprintf(buf, "<trigger \"%.40s\"@%p>", name.c_str(), obj);
+    else
+      sprintf(buf, "<trigger @%p>", obj);
     return omStrDup(buf);
   } else {
     sprintf(buf, "<unknown type %d>", type);
@@ -2002,6 +2014,7 @@ class ProcJob : public Job {
 public:
   ProcJob(const char *procname_init) : Job(),
     procname(procname_init) {
+    set_name(procname_init);
   }
   void appendArg(vector<leftv> &argv, string &s) {
     if (s.size() == 0) return;
@@ -2660,6 +2673,37 @@ BOOLEAN threadResult(leftv result, leftv arg) {
   return FALSE;
 }
 
+BOOLEAN setSharedName(leftv result, leftv arg) {
+  Command cmd("setSharedName", result, arg);
+  cmd.check_argc(2);
+  int type = cmd.argtype(0);
+  cmd.check_init(0, "first argument is not initialized");
+  if (type != type_job && type != type_trigger && type != type_threadpool) {
+    cmd.report("first argument must be a job, trigger, or threadpool");
+  }
+  cmd.check_arg(1, STRING_CMD, "second argument must be a string");
+  if (cmd.ok()) {
+    SharedObject *obj = cmd.shared_arg<SharedObject>(0);
+    obj->set_name((char *) cmd.arg(1));
+  }
+  return cmd.status();
+}
+
+BOOLEAN getSharedName(leftv result, leftv arg) {
+  Command cmd("getSharedName", result, arg);
+  cmd.check_argc(1);
+  int type = cmd.argtype(0);
+  cmd.check_init(0, "first argument is not initialized");
+  if (type != type_job && type != type_trigger && type != type_threadpool) {
+    cmd.report("first argument must be a job, trigger, or threadpool");
+  }
+  if (cmd.ok()) {
+    SharedObject *obj = cmd.shared_arg<SharedObject>(0);
+    cmd.set_result(obj->get_name().c_str());
+  }
+  return cmd.status();
+}
+
 }
 
 using namespace LibThread;
@@ -2725,8 +2769,8 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "threadResult", FALSE, threadResult);
   fn->iiAddCproc(libname, "createJob", FALSE, createJob);
   fn->iiAddCproc(libname, "currentJob", FALSE, currentJob);
-  // fn->iiAddCproc(libname, "nameJob", FALSE, nameJob);
-  // fn->iiAddCproc(libname, "getJobName", FALSE, getJobName);
+  fn->iiAddCproc(libname, "setSharedName", FALSE, setSharedName);
+  fn->iiAddCproc(libname, "getSharedName", FALSE, getSharedName);
   fn->iiAddCproc(libname, "startJob", FALSE, startJob);
   fn->iiAddCproc(libname, "waitJob", FALSE, waitJob);
   fn->iiAddCproc(libname, "cancelJob", FALSE, cancelJob);
