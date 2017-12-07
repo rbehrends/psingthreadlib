@@ -1328,11 +1328,6 @@ static ThreadState *newThread(void *(*thread_func)(ThreadState *, void *),
     if (!thread_state[i].active) {
       ts = thread_state + i;
       ts->index = i;
-      if (pthread_create(&ts->id, NULL, thread_main, ts)<0) {
-	if (error)
-	  *error = "createThread: internal error: failed to create thread";
-	goto fail;
-      }
       ts->parent = pthread_self();
       ts->active = true;
       ts->running = true;
@@ -1341,6 +1336,11 @@ static ThreadState *newThread(void *(*thread_func)(ThreadState *, void *),
       ts->thread_func = thread_func;
       ts->arg = arg;
       ts->result = NULL;
+      if (pthread_create(&ts->id, NULL, thread_main, ts)<0) {
+	if (error)
+	  *error = "createThread: internal error: failed to create thread";
+	goto fail;
+      }
       goto exit;
     }
   }
