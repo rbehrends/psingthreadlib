@@ -2411,7 +2411,7 @@ static BOOLEAN updateTrigger(leftv result, leftv arg) {
 	ThreadPool::notifyDeps(trigger->pool, trigger);
       }
     }
-    trigger->pool->lock.lock();
+    trigger->pool->lock.unlock();
   }
   return cmd.status();
 }
