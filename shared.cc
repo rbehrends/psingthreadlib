@@ -1584,10 +1584,10 @@ public:
 
 struct JobCompare {
   bool operator()(const Job* lhs, const Job* rhs) {
-    if (lhs->fast > rhs->fast) {
+    if (lhs->fast < rhs->fast) {
       return true;
     }
-    if (lhs->prio > rhs->prio) {
+    if (lhs->prio < rhs->prio) {
       return true;
     }
     if (lhs->prio == rhs->prio) {
@@ -2607,9 +2607,9 @@ static BOOLEAN scheduleJob(leftv result, leftv arg) {
   long prio = has_prio ? (long) cmd.arg(has_pool) : 0L;
   int first_arg = has_pool + has_prio;
   if (cmd.test_arg(first_arg, type_job)) {
-    jobs.push_back(*(Job **)(cmd.arg(has_pool)));
+    jobs.push_back(*(Job **)(cmd.arg(first_arg)));
   } else if (cmd.test_arg(first_arg, STRING_CMD)) {
-    jobs.push_back(new ProcJob((char *)(cmd.arg(has_pool))));
+    jobs.push_back(new ProcJob((char *)(cmd.arg(first_arg))));
   } else if (cmd.test_arg(first_arg, LIST_CMD)) {
     lists l = (lists) (cmd.arg(first_arg));
     int n = lSize(l);
