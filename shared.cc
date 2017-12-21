@@ -1210,7 +1210,7 @@ BOOLEAN writeSyncVar(leftv result, leftv arg) {
 }
 
 BOOLEAN updateSyncVar(leftv result, leftv arg) {
-  Command cmd("writeSyncVar", result, arg);
+  Command cmd("updateSyncVar", result, arg);
   cmd.check_argc_min(2);
   cmd.check_arg(0, type_syncvar, "first argument must be a syncvar");
   cmd.check_init(0, "syncvar has not been initialized");
