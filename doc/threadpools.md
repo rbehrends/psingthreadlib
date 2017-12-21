@@ -257,6 +257,11 @@ fires via the `chainTrigger()` function:
 
     chainTrigger(trigger trig, job|trigger dep);
 
+The state of a trigger can be tested explicitly with `testTrigger()`,
+which returns 1 or 0, depending on whether it has fired or not.
+
+    int success = testTrigger(trigger trig);
+
 Because it is often useful to discard any remaining jobs when a trigger
 fires, the `cancelOnTrigger()` function allows to automate this.
 

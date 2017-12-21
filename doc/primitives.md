@@ -88,6 +88,24 @@ Example:
         writeSyncVar(sv, list(1, 2, 3));
         readSyncVar(sv);
 
+It is possible to modify the value of a syncvar after it has been
+initialized with `updateSyncVar(sv, procname, ...)`. This procedure
+updates a syncvar with the result of applying procname to its contents
+(and any additional arguments being passed in).
+
+Example:
+
+        syncvar sv = makeSyncVar("syncvar:example");
+        writeSyncVar(sv, 0);
+        proc add(int x, int y) { return (x+y); }
+        updateSyncVar(sv, "add", 1);
+        updateSyncVar(sv, "add", 2);
+
+The intended use of `updateSyncVar` is to have it store a sequence
+of monotonically increasing values (such as a sequence of integers
+or a sequence of sets where each set is a superset of its predecessor)
+until the value satisfies a condition.
+
 Like all shared objects, synchronization variables can contain
 other shared objects. This is particularly useful to make them
 globally available across all threads.

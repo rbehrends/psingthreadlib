@@ -440,6 +440,25 @@ private:
 public:
   SingularSyncVar(): SharedObject(), init(0), lock(), cond(&lock) { }
   virtual ~SingularSyncVar() { }
+  void acquire() {
+    lock.lock();
+  }
+  void release() {
+    lock.unlock();
+  }
+  void wait_init() {
+    while (!init)
+      cond.wait();
+  }
+  leftv get() {
+    if (value.size() == 0) return NULL;
+    return LinTree::from_string(value);
+  }
+  void update(leftv val) {
+    value = LinTree::to_string(val);
+    init = 1;
+    cond.broadcast();
+  }
   int write(string item) {
     int result = 0;
     lock.lock();
@@ -707,6 +726,56 @@ SharedObject *consSyncVar() {
 
 SharedObject *consRegion() {
   return new Region();
+}
+
+static void appendArg(vector<leftv> &argv, string &s) {
+  if (s.size() == 0) return;
+  leftv val = LinTree::from_string(s);
+  if (val->Typ() == NONE) {
+    omFreeBin(val, sleftv_bin);
+    return;
+  }
+  argv.push_back(val);
+}
+
+static void appendArg(vector<leftv> &argv, leftv arg) {
+  argv.push_back(arg);
+}
+
+static void appendArgCopy(vector<leftv> &argv, leftv arg) {
+  leftv val = (leftv) omAlloc0Bin(sleftv_bin);
+  val->Copy(arg);
+  argv.push_back(val);
+}
+
+
+static BOOLEAN executeProc(sleftv &result,
+  const char *procname, const vector<leftv> &argv)
+{
+  leftv procnode = (leftv) omAlloc0Bin(sleftv_bin);
+  procnode->name = omStrDup(procname);
+  procnode->req_packhdl = basePack;
+  int error = procnode->Eval();
+  if (error) {
+    Werror("procedure \"%s\" not found", procname);
+    omFreeBin(procnode, sleftv_bin);
+    return TRUE;
+  }
+  memset(&result, 0, sizeof(result));
+  leftv *tail = &procnode->next;
+  for (int i = 0; i < argv.size(); i++) {
+    *tail = argv[i];
+    tail = &(*tail)->next;
+  }
+  *tail = NULL;
+  error = iiExprArithM(&result, procnode, '(');
+  procnode->CleanUp();
+  omFreeBin(procnode, sleftv_bin);
+  if (error) {
+    Werror("procedure call of \"%s\" failed", procname);
+    return TRUE;
+  }
+  return FALSE;
 }
 
 BOOLEAN makeAtomicTable(leftv result, leftv arg) {
@@ -1140,6 +1209,35 @@ BOOLEAN writeSyncVar(leftv result, leftv arg) {
   return FALSE;
 }
 
+BOOLEAN updateSyncVar(leftv result, leftv arg) {
+  Command cmd("writeSyncVar", result, arg);
+  cmd.check_argc_min(2);
+  cmd.check_arg(0, type_syncvar, "first argument must be a syncvar");
+  cmd.check_init(0, "syncvar has not been initialized");
+  cmd.check_arg(1, STRING_CMD, "second argument must be a string");
+  if (cmd.ok()) {
+    SingularSyncVar *syncvar = cmd.shared_arg<SingularSyncVar>(0);
+    char *procname = (char *) cmd.arg(1);
+    arg = arg->next->next;
+    syncvar->acquire();
+    syncvar->wait_init();
+    vector<leftv> argv;
+    appendArg(argv, syncvar->get());
+    while (arg) {
+      appendArgCopy(argv, arg);
+      arg = arg->next;
+    }
+    int error = executeProc(*result, procname, argv);
+    if (!error) {
+      syncvar->update(result);
+    }
+    syncvar->release();
+    return error;
+  }
+  return cmd.status();
+}
+
+
 BOOLEAN readSyncVar(leftv result, leftv arg) {
   if (wrong_num_args("readSyncVar", arg, 1))
     return TRUE;
@@ -1489,98 +1587,6 @@ public:
   Trigger() : Job() { set_type(type_trigger); fast = true; }
 };
 
-class AccTrigger : public Trigger {
-private:
-  long count;
-public:
-  AccTrigger(long count_init): Trigger(), count(count_init) {
-  }
-  virtual bool ready() {
-    if (!Trigger::ready()) return false;
-    return args.size() >= count;
-  }
-  virtual bool accept(leftv arg) {
-    return true;
-  }
-  virtual void activate(leftv arg) {
-    while (arg != NULL && !ready()) {
-      args.push_back(LinTree::to_string(arg));
-      if (ready()) {
-	return;
-      }
-      arg = arg->next;
-    }
-  }
-  virtual void execute() {
-    lists l = (lists) omAlloc0Bin(slists_bin);
-    l->Init(args.size());
-    for (int i = 0; i < args.size(); i++) {
-      leftv val = LinTree::from_string(args[i]);
-      memcpy(&l->m[i], val, sizeof(*val));
-      omFreeBin(val, sleftv_bin);
-    }
-    sleftv val;
-    memset(&val, 0, sizeof(val));
-    val.rtyp = LIST_CMD;
-    val.data = l;
-    result = LinTree::to_string(&val);
-    // val.CleanUp();
-  }
-};
-
-class CountTrigger : public Trigger {
-private:
-  long count;
-public:
-  CountTrigger(long count_init): Trigger(), count(count_init) {
-  }
-  virtual bool ready() {
-    if (!Trigger::ready()) return false;
-    return count <= 0;
-  }
-  virtual bool accept(leftv arg) {
-    return arg == NULL;
-  }
-  virtual void activate(leftv arg) {
-    if (!ready()) {
-      count--;
-    }
-  }
-  virtual void execute() {
-    // do nothing
-  }
-};
-
-class SetTrigger : public Trigger {
-private:
-  vector<bool> set;
-  long count;
-public:
-  SetTrigger(long count_init) : Trigger(), count(0),
-    set(count_init) {
-  }
-  virtual bool ready() {
-    if (!Trigger::ready()) return false;
-    return count == set.size();
-  }
-  virtual bool accept(leftv arg) {
-    return arg->Typ() == INT_CMD;
-  }
-  virtual void activate(leftv arg) {
-    if (!ready()) {
-      long value = (long) arg->Data();
-      if (value < 0 || value >= count) return;
-      if (set[value]) return;
-      set[value] = true;
-      count++;
-    }
-  }
-  virtual void execute() {
-    // do nothing
-  }
-};
-
-
 bool Job::ready() {
   vector<Job *>::iterator it;
   for (it = deps.begin(); it != deps.end(); it++) {
@@ -1883,6 +1889,143 @@ void Job::run() {
   done = true;
 }
 
+class AccTrigger : public Trigger {
+private:
+  long count;
+public:
+  AccTrigger(long count_init): Trigger(), count(count_init) {
+  }
+  virtual bool ready() {
+    if (!Trigger::ready()) return false;
+    return args.size() >= count;
+  }
+  virtual bool accept(leftv arg) {
+    return true;
+  }
+  virtual void activate(leftv arg) {
+    while (arg != NULL && !ready()) {
+      args.push_back(LinTree::to_string(arg));
+      if (ready()) {
+	return;
+      }
+      arg = arg->next;
+    }
+  }
+  virtual void execute() {
+    lists l = (lists) omAlloc0Bin(slists_bin);
+    l->Init(args.size());
+    for (int i = 0; i < args.size(); i++) {
+      leftv val = LinTree::from_string(args[i]);
+      memcpy(&l->m[i], val, sizeof(*val));
+      omFreeBin(val, sleftv_bin);
+    }
+    sleftv val;
+    memset(&val, 0, sizeof(val));
+    val.rtyp = LIST_CMD;
+    val.data = l;
+    result = LinTree::to_string(&val);
+    // val.CleanUp();
+  }
+};
+
+class CountTrigger : public Trigger {
+private:
+  long count;
+public:
+  CountTrigger(long count_init): Trigger(), count(count_init) {
+  }
+  virtual bool ready() {
+    if (!Trigger::ready()) return false;
+    return count <= 0;
+  }
+  virtual bool accept(leftv arg) {
+    return arg == NULL;
+  }
+  virtual void activate(leftv arg) {
+    if (!ready()) {
+      count--;
+    }
+  }
+  virtual void execute() {
+    // do nothing
+  }
+};
+
+class SetTrigger : public Trigger {
+private:
+  vector<bool> set;
+  long count;
+public:
+  SetTrigger(long count_init) : Trigger(), count(0),
+    set(count_init) {
+  }
+  virtual bool ready() {
+    if (!Trigger::ready()) return false;
+    return count == set.size();
+  }
+  virtual bool accept(leftv arg) {
+    return arg->Typ() == INT_CMD;
+  }
+  virtual void activate(leftv arg) {
+    if (!ready()) {
+      long value = (long) arg->Data();
+      if (value < 0 || value >= count) return;
+      if (set[value]) return;
+      set[value] = true;
+      count++;
+    }
+  }
+  virtual void execute() {
+    // do nothing
+  }
+};
+
+
+class ProcTrigger : public Trigger {
+private:
+  string procname;
+  bool success;
+public:
+  ProcTrigger(const char *p) : Trigger(), procname(p), success(false) {
+  }
+  virtual bool ready() {
+    if (!Trigger::ready()) return false;
+    return success;
+  }
+  virtual bool accept(leftv arg) {
+    return TRUE;
+  }
+  virtual void activate(leftv arg) {
+    if (!ready()) {
+      pool->lock.unlock();
+      vector<leftv> argv;
+      for (int i = 0; i < args.size(); i++) {
+        appendArg(argv, args[i]);
+      }
+      int error = false;
+      while (arg) {
+        appendArgCopy(argv, arg);
+	arg = arg->next;
+      }
+      sleftv val;
+      if (!error)
+	error = executeProc(val, procname.c_str(), argv);
+      if (!error) {
+        if (val.Typ() == NONE || (val.Typ() == INT_CMD &&
+	                          (long) val.Data()))
+	{
+	  success = true;
+	}
+        val.CleanUp();
+      }
+      pool->lock.lock();
+    }
+  }
+  virtual void execute() {
+    // do nothing
+  }
+};
+
 static BOOLEAN createThreadPool(leftv result, leftv arg) {
   long n;
   Command cmd("createThreadPool", result, arg);
@@ -2023,15 +2166,6 @@ public:
     procname(procname_init) {
     set_name(procname_init);
   }
-  void appendArg(vector<leftv> &argv, string &s) {
-    if (s.size() == 0) return;
-    leftv val = LinTree::from_string(s);
-    if (val->Typ() == NONE) {
-      omFreeBin(val, sleftv_bin);
-      return;
-    }
-    argv.push_back(val);
-  }
   virtual void execute() {
     vector<leftv> argv;
     for (int i = 0; i <args.size(); i++) {
@@ -2040,29 +2174,12 @@ public:
     for (int i = 0; i < deps.size(); i++) {
       appendArg(argv, deps[i]->result);
     }
-    leftv procnode = (leftv) omAlloc0Bin(sleftv_bin);
-    procnode->name = omStrDup(procname.c_str());
-    procnode->req_packhdl = basePack;
-    int error = procnode->Eval();
-    if (error) {
-      Werror("job execution: procedure \"%s\" not found", procname.c_str());
-      return;
-    }
     sleftv val;
-    memset(&val, 0, sizeof(val));
-    leftv *tail = &procnode->next;
-    for (int i = 0; i < argv.size(); i++) {
-      *tail = argv[i];
-      tail = &(*tail)->next;
+    int error = executeProc(val, procname.c_str(), argv);
+    if (!error) {
+      result = (LinTree::to_string(&val));
+      val.CleanUp();
     }
-    *tail = NULL;
-    error = iiExprArithM(&val, procnode, '(');
-    if (error) {
-      Werror("job execution: procedure call of \"%s\" failed", procname.c_str());
-      return;
-    }
-    result = (LinTree::to_string(&val));
-    val.CleanUp();
   }
 };
 
@@ -2071,15 +2188,6 @@ private:
   void (*cfunc)(leftv result, leftv arg);
 public:
   KernelJob(void (*func)(leftv result, leftv arg)) : cfunc(func) { }
-  void appendArg(vector<leftv> &argv, string &s) {
-    if (s.size() == 0) return;
-    leftv val = LinTree::from_string(s);
-    if (val->Typ() == NONE) {
-      omFreeBin(val, sleftv_bin);
-      return;
-    }
-    argv.push_back(val);
-  }
   virtual void execute() {
     vector<leftv> argv;
     for (int i = 0; i <args.size(); i++) {
@@ -2372,10 +2480,14 @@ static BOOLEAN createTrigger(leftv result, leftv arg) {
   }
   cmd.check_argc(has_pool + 2);
   cmd.check_arg(has_pool + 0, STRING_CMD, "trigger subtype must be a string");
-  cmd.check_arg(has_pool + 1, INT_CMD, "trigger argument must be an integer");
+  const char *kind = (const char *)(cmd.arg(has_pool + 0));
+  if (0 == strcmp(kind, "proc")) {
+    cmd.check_arg(has_pool + 1, STRING_CMD, "proc trigger argument must be a string");
+  } else {
+    cmd.check_arg(has_pool + 1, INT_CMD, "trigger argument must be an integer");
+  }
   if (cmd.ok()) {
     Trigger *trigger;
-    const char *kind = (const char *)(cmd.arg(has_pool + 0));
     long n = (long) (cmd.arg(has_pool + 1));
     if (n < 0)
       return cmd.abort("trigger argument must be a non-negative integer");
@@ -2385,6 +2497,8 @@ static BOOLEAN createTrigger(leftv result, leftv arg) {
       trigger = new CountTrigger(n);
     } else if (0 == strcmp(kind, "set")) {
       trigger = new SetTrigger(n);
+    } else if (0 == strcmp(kind, "proc")) {
+      trigger = new ProcTrigger((const char *) cmd.arg(has_pool + 1));
     } else {
       return cmd.abort("unknown trigger subtype");
     }
@@ -2437,7 +2551,20 @@ static BOOLEAN chainTrigger(leftv result, leftv arg) {
   return cmd.status();
 }
 
-
+static BOOLEAN testTrigger(leftv result, leftv arg) {
+  Command cmd("testTrigger", result, arg);
+  cmd.check_argc(1);
+  cmd.check_arg(0, type_trigger, "argument must be a trigger");
+  cmd.check_init(0, "trigger not initialized");
+  if (cmd.ok()) {
+    Trigger *trigger = cmd.shared_arg<Trigger>(0);
+    ThreadPool *pool = trigger->pool;
+    pool->lock.lock();
+    cmd.set_result((long)trigger->ready());
+    pool->lock.unlock();
+  }
+  return cmd.status();
+}
 
 
 static BOOLEAN scheduleJob(leftv result, leftv arg) {
@@ -2752,6 +2879,7 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "receiveChannel", FALSE, receiveChannel);
   fn->iiAddCproc(libname, "statChannel", FALSE, statChannel);
   fn->iiAddCproc(libname, "writeSyncVar", FALSE, writeSyncVar);
+  fn->iiAddCproc(libname, "updateSyncVar", FALSE, updateSyncVar);
   fn->iiAddCproc(libname, "readSyncVar", FALSE, readSyncVar);
   fn->iiAddCproc(libname, "statSyncVar", FALSE, statSyncVar);
 
@@ -2790,6 +2918,7 @@ extern "C" int mod_init(SModulFunctions *fn)
   fn->iiAddCproc(libname, "scheduleJobs", FALSE, scheduleJob);
   fn->iiAddCproc(libname, "createTrigger", FALSE, createTrigger);
   fn->iiAddCproc(libname, "updateTrigger", FALSE, updateTrigger);
+  fn->iiAddCproc(libname, "testTrigger", FALSE, testTrigger);
   fn->iiAddCproc(libname, "chainTrigger", FALSE, chainTrigger);
 
   LinTree::init();
