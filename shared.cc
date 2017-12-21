@@ -1551,6 +1551,8 @@ class Trigger;
 class Job : public SharedObject {
 public:
   ThreadPool *pool;
+  long prio;
+  size_t id;
   long pending_index;
   vector<Job *> deps;
   vector<Job *> notify;
@@ -1565,7 +1567,7 @@ public:
   bool cancelled;
   Job() : SharedObject(), pool(NULL), deps(), pending_index(-1), fast(false),
     done(false), running(false), queued(false), cancelled(false), data(NULL),
-    result(), args(), notify(), triggers()
+    result(), args(), notify(), triggers(), prio(0)
   { set_type(type_job); }
   ~Job();
   void addDep(Job *job) {
@@ -1578,6 +1580,21 @@ public:
   virtual bool ready();
   virtual void execute() = 0;
   void run();
+};
+
+struct JobCompare {
+  bool operator()(const Job* lhs, const Job* rhs) {
+    if (lhs->fast > rhs->fast) {
+      return true;
+    }
+    if (lhs->prio > rhs->prio) {
+      return true;
+    }
+    if (lhs->prio == rhs->prio) {
+      return lhs->id > rhs->id;
+    }
+    return false;
+  }
 };
 
 class Trigger : public Job {
@@ -1616,11 +1633,12 @@ static SIMPLE_THREAD_VAR Job *currentJobRef;
 class ThreadPool : public SharedObject {
 private:
   bool single_threaded;
+  size_t jobid;
   int nthreads;
   bool shutting_down;
   int shutdown_counter;
   vector<ThreadState *> threads;
-  deque<Job *> global_queue;
+  priority_queue<Job *, vector<Job *>, JobCompare> global_queue;
   vector<JobQueue *> thread_queues;
   vector<Job *> pending;
   ConditionVariable cond;
@@ -1631,7 +1649,7 @@ public:
     SharedObject(), threads(), global_queue(), thread_queues(),
     single_threaded(n==0), nthreads(n == 0 ? 1 : n),
     lock(true), cond(&lock), response(&lock),
-    shutting_down(false), shutdown_counter(0)
+    shutting_down(false), shutdown_counter(0), jobid(0)
   {
     thread_queues.push_back(new JobQueue());
   }
@@ -1681,12 +1699,10 @@ public:
   void attachJob(Job *job) {
     lock.lock();
     job->pool = this;
+    job->id = jobid++;
     acquireShared(job);
     if (job->ready()) {
-      if (job->fast)
-	global_queue.push_front(job);
-      else
-	global_queue.push_back(job);
+      global_queue.push(job);
       cond.signal();
     }
     else if (job->pending_index < 0) {
@@ -1710,10 +1726,7 @@ public:
   }
   void queueJob(Job *job) {
     lock.lock();
-    if (job->fast)
-      global_queue.push_front(job);
-    else
-      global_queue.push_back(job);
+    global_queue.push(job);
     cond.signal();
     lock.unlock();
   }
@@ -1828,8 +1841,8 @@ public:
        pool->response.signal();
        continue;
       } else if (!pool->global_queue.empty()) {
-       Job *job = pool->global_queue.front();
-       pool->global_queue.pop_front();
+       Job *job = pool->global_queue.top();
+       pool->global_queue.pop();
        if (!pool->global_queue.empty())
          cond.signal();
        currentJobRef = job;
@@ -2307,10 +2320,13 @@ static BOOLEAN startJob(leftv result, leftv arg) {
   cmd.check_argc_min(1+has_pool);
   if (has_pool)
     cmd.check_init(0, "threadpool not initialized");
-  cmd.check_arg(has_pool, type_job, STRING_CMD,
+  int has_prio = cmd.test_arg(has_pool, INT_CMD);
+  long prio = has_prio ? (long) cmd.arg(has_pool) : 0L;
+  int first_arg = has_pool + has_prio;
+  cmd.check_arg(first_arg, type_job, STRING_CMD,
     "job argument must be a job or string");
-  if (cmd.ok() && cmd.argtype(has_pool) == type_job)
-    cmd.check_init(has_pool, "job not initialized");
+  if (cmd.ok() && cmd.argtype(first_arg) == type_job)
+    cmd.check_init(first_arg, "job not initialized");
   if (!cmd.ok()) return cmd.status();
   ThreadPool *pool;
   if (has_pool)
@@ -2321,19 +2337,20 @@ static BOOLEAN startJob(leftv result, leftv arg) {
     pool = currentThreadPoolRef;
   }
   Job *job;
-  if (cmd.argtype(has_pool) == type_job) 
-    job = *(Job **)(cmd.arg(has_pool));
+  if (cmd.argtype(first_arg) == type_job) 
+    job = *(Job **)(cmd.arg(first_arg));
   else
-    job = new ProcJob((char *)(cmd.arg(has_pool)));
+    job = new ProcJob((char *)(cmd.arg(first_arg)));
   leftv a = arg->next;
   if (has_pool) a = a->next;
+  if (has_prio) a = a->next;
   for (; a != NULL; a = a->next) {
     job->args.push_back(LinTree::to_string(a));
   }
   if (job->pool)
-    cmd.report("job has already been scheduled");
-  else
-    pool->attachJob(job);
+    return cmd.abort("job has already been scheduled");
+  job->prio = prio;
+  pool->attachJob(job);
   cmd.set_result(type_job, new_shared(job));
   return cmd.status();
 }
@@ -2577,6 +2594,8 @@ static BOOLEAN scheduleJob(leftv result, leftv arg) {
     cmd.check_arg(0, type_threadpool, "first argument must be a threadpool");
     cmd.check_init(0, "threadpool not initialized");
   }
+  cmd.check_argc_min(has_pool+1);
+  int has_prio = cmd.test_arg(has_pool, INT_CMD);
   ThreadPool *pool;
   if (has_pool)
     pool = cmd.shared_arg<ThreadPool>(0);
@@ -2585,16 +2604,18 @@ static BOOLEAN scheduleJob(leftv result, leftv arg) {
       return cmd.abort("no current threadpool defined");
     pool = currentThreadPoolRef;
   }
-  if (cmd.test_arg(has_pool, type_job)) {
+  long prio = has_prio ? (long) cmd.arg(has_pool) : 0L;
+  int first_arg = has_pool + has_prio;
+  if (cmd.test_arg(first_arg, type_job)) {
     jobs.push_back(*(Job **)(cmd.arg(has_pool)));
-  } else if (cmd.test_arg(has_pool, STRING_CMD)) {
+  } else if (cmd.test_arg(first_arg, STRING_CMD)) {
     jobs.push_back(new ProcJob((char *)(cmd.arg(has_pool))));
-  } else if (cmd.test_arg(has_pool, LIST_CMD)) {
-    lists l = (lists) (cmd.arg(has_pool));
+  } else if (cmd.test_arg(first_arg, LIST_CMD)) {
+    lists l = (lists) (cmd.arg(first_arg));
     int n = lSize(l);
     for (int i = 0; i < n; i++) {
       if (l->m[i].Typ() != type_job)
-        return cmd.abort("second argument must be a job, string, or list of jobs");
+        return cmd.abort("job argument must be a job, string, or list of jobs");
     }
     for (int i = 0; i < n; i++) {
       Job *job = *(Job **) (l->m[i].Data());
@@ -2603,11 +2624,12 @@ static BOOLEAN scheduleJob(leftv result, leftv arg) {
       jobs.push_back(job);
     }
   } else {
-    return cmd.abort("second argument must be a job, string, or list of jobs");
+    return cmd.abort("job argument must be a job, string, or list of jobs");
   }
   bool error = false;
   leftv a = arg->next;
   if (has_pool) a = a->next;
+  if (has_prio) a = a->next;
   for (; !error && a; a = a->next) {
     if (a->Typ() == type_job || a->Typ() == type_trigger) {
       deps.push_back(*(Job **)(a->Data()));
@@ -2632,6 +2654,7 @@ static BOOLEAN scheduleJob(leftv result, leftv arg) {
     if (job->pool) {
       return cmd.abort("job has already been scheduled");
     }
+    job->prio = prio;
   }
   for (int i = 0; i < deps.size(); i++) {
     Job *job = deps[i];
