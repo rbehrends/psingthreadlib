@@ -6,7 +6,7 @@ Note: priorities are not yet fully supported.
 
 The function `createThreadPool()` is used to create a new threadpool:
 
-    threadpool pool = createThreadPool(int nthreads[, int npriothreads]);
+    threadpool pool = createThreadPool(int nthreads);
 
 The `nthreads` arguments defines how many worker threads the threadpool
 should have (and thus the maximum level of parallelism that the threadpool
@@ -15,10 +15,6 @@ create any separate threads, but create a pseudo threadpool that is
 subordinate to the current thread. It is useful for testing and debugging
 and can also be used to emulate user-space threads in single-threaded
 Singular.
-
-The optional argument `npriothreads` must be less than or equal to `nthreads`
-and describes how many worker threads are using priority-based scheduling
-rather than first-come-first-served scheduling.
 
 A threadpool can be shut down with the `closeThreadPool()` function:
 
@@ -135,9 +131,9 @@ The simplest way to execute a job is with the `startJob()` function:
 The first argument is the optional threadpool on which to execute the
 job; if absent, it defaults to the current threadpool. It is followed
 (optionally) by a priority argument, which defaults to zero. Higher
-numbers indicate a higher priority. High priority worker threads (see
-`createThreadPool()` above) will execute jobs in priority order, other
-threads will execute them in first-come-first-served order.
+numbers indicate a higher priority. High priority jobs will preempt
+low priority jobs; note that this can lead to low priority jobs being
+starved if there is a constant influx of high priority jobs.
 
 The next argument is the actual job. For simple jobs, a string
 describing a function name can be supplied instead, which follows
