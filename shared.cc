@@ -1621,8 +1621,10 @@ Job::~Job() {
 
 typedef queue<Job *> JobQueue;
 
-struct PoolInfo {
-  ThreadPool *pool;
+class Scheduler;
+
+struct SchedInfo {
+  Scheduler *scheduler;
   Job *job;
   int num;
 };
@@ -1631,6 +1633,27 @@ static SIMPLE_THREAD_VAR ThreadPool *currentThreadPoolRef;
 static SIMPLE_THREAD_VAR Job *currentJobRef;
 
 class ThreadPool : public SharedObject {
+public:
+  Scheduler *scheduler;
+  int poolid;
+  int nthreads;
+  ThreadPool(int n);
+  ~ThreadPool();
+  ThreadState *getThread(int i);
+  void shutdown(bool wait);
+  void addThread(ThreadState *thread);
+  void attachJob(Job *job);
+  void detachJob(Job *job);
+  void queueJob(Job *job);
+  void broadcastJob(Job *job);
+  void cancelDeps(Job * job);
+  void cancelJob(Job *job);
+  void waitJob(Job *job);
+  void clearThreadState();
+};
+
+
+class Scheduler : public SharedObject {
 private:
   bool single_threaded;
   size_t jobid;
@@ -1645,7 +1668,7 @@ private:
   ConditionVariable response;
 public:
   Lock lock;
-  ThreadPool(int n) :
+  Scheduler(int n) :
     SharedObject(), threads(), global_queue(), thread_queues(),
     single_threaded(n==0), nthreads(n == 0 ? 1 : n),
     lock(true), cond(&lock), response(&lock),
@@ -1653,7 +1676,7 @@ public:
   {
     thread_queues.push_back(new JobQueue());
   }
-  virtual ~ThreadPool() {
+  virtual ~Scheduler() {
     for (int i = 0; i < thread_queues.size(); i++) {
       JobQueue *q = thread_queues[i];
       while (!q->empty()) {
@@ -1668,12 +1691,12 @@ public:
   ThreadState *getThread(int i) { return threads[i]; }
   void shutdown(bool wait) {
     if (single_threaded) {
-      PoolInfo *info = new PoolInfo();
+      SchedInfo *info = new SchedInfo();
       info->num = 0;
-      info->pool = this;
+      info->scheduler = this;
       acquireShared(this);
       info->job = NULL;
-      ThreadPool::main(NULL, info);
+      Scheduler::main(NULL, info);
       return;
     }
     lock.lock();
@@ -1696,9 +1719,9 @@ public:
     threads.push_back(thread);
     thread_queues.push_back(new JobQueue());
   }
-  void attachJob(Job *job) {
+  void attachJob(ThreadPool *pool, Job *job) {
     lock.lock();
-    job->pool = this;
+    job->pool = pool;
     job->id = jobid++;
     acquireShared(job);
     if (job->ready()) {
@@ -1706,7 +1729,7 @@ public:
       cond.signal();
     }
     else if (job->pending_index < 0) {
-      job->pool = this;
+      job->pool = pool;
       job->pending_index = pending.size();
       pending.push_back(job);
     }
@@ -1760,12 +1783,12 @@ public:
   }
   void waitJob(Job *job) {
     if (single_threaded) {
-      PoolInfo *info = new PoolInfo();
+      SchedInfo *info = new SchedInfo();
       info->num = 0;
-      info->pool = this;
+      info->scheduler = this;
       acquireShared(this);
       info->job = job;
-      ThreadPool::main(NULL, info);
+      Scheduler::main(NULL, info);
     } else {
       lock.lock();
       for (;;) {
@@ -1781,14 +1804,14 @@ public:
   void clearThreadState() {
     threads.clear();
   }
-  static void notifyDeps(ThreadPool *pool, Job *job) {
+  static void notifyDeps(Scheduler *scheduler, Job *job) {
     vector<Job *> &notify = job->notify;
     job->incref(notify.size());
     for (int i = 0; i <notify.size(); i++) {
       Job *next = notify[i];
       if (!next->queued && next->ready() && !next->cancelled) {
         next->queued = true;
-        pool->queueJob(next);
+        scheduler->queueJob(next);
       }
     }
     vector<Trigger *> &triggers = job->triggers;
@@ -1800,7 +1823,7 @@ public:
       if (trigger->accept(arg)) {
         trigger->activate(arg);
 	if (trigger->ready())
-	   pool->queueJob(trigger);
+	   scheduler->queueJob(trigger);
       }
     }
     if (arg) {
@@ -1809,63 +1832,102 @@ public:
     }
   }
   static void *main(ThreadState *ts, void *arg) {
-    PoolInfo *info = (PoolInfo *) arg;
-    ThreadPool *pool = info->pool;
+    SchedInfo *info = (SchedInfo *) arg;
+    Scheduler *scheduler = info->scheduler;
     ThreadPool *oldThreadPool = currentThreadPoolRef;
-    currentThreadPoolRef = pool;
-    Lock &lock = pool->lock;
-    ConditionVariable &cond = pool->cond;
-    ConditionVariable &response = pool->response;
-    JobQueue *my_queue = pool->thread_queues[info->num];
-    if (!pool->single_threaded)
+    // TODO: set current thread pool
+    // currentThreadPoolRef = pool;
+    Lock &lock = scheduler->lock;
+    ConditionVariable &cond = scheduler->cond;
+    ConditionVariable &response = scheduler->response;
+    JobQueue *my_queue = scheduler->thread_queues[info->num];
+    if (!scheduler->single_threaded)
       thread_init();
     lock.lock();
     for (;;) {
       if (info->job && info->job->done)
         break;
-      if (pool->shutting_down) {
-        pool->shutdown_counter++;
-        pool->response.signal();
+      if (scheduler->shutting_down) {
+        scheduler->shutdown_counter++;
+        scheduler->response.signal();
 	break;
       }
       if (!my_queue->empty()) {
        Job *job = my_queue->front();
        my_queue->pop();
-       if (!pool->global_queue.empty())
+       if (!scheduler->global_queue.empty())
          cond.signal();
        currentJobRef = job;
        job->run();
        currentJobRef = NULL;
-       notifyDeps(pool, job);
+       notifyDeps(scheduler, job);
        releaseShared(job);
-       pool->response.signal();
+       scheduler->response.signal();
        continue;
-      } else if (!pool->global_queue.empty()) {
-       Job *job = pool->global_queue.top();
-       pool->global_queue.pop();
-       if (!pool->global_queue.empty())
+      } else if (!scheduler->global_queue.empty()) {
+       Job *job = scheduler->global_queue.top();
+       scheduler->global_queue.pop();
+       if (!scheduler->global_queue.empty())
          cond.signal();
        currentJobRef = job;
        job->run();
        currentJobRef = NULL;
-       notifyDeps(pool, job);
+       notifyDeps(scheduler, job);
        releaseShared(job);
-       pool->response.signal();
+       scheduler->response.signal();
        continue;
       } else {
-        if (pool->single_threaded) {
+        if (scheduler->single_threaded) {
           break;
         }
         cond.wait();
       }
     }
-    releaseShared(currentThreadPoolRef);
+    // TODO: correct current thread pool
+    // releaseShared(currentThreadPoolRef);
     currentThreadPoolRef = oldThreadPool;
-    pool->lock.unlock();
+    scheduler->lock.unlock();
     delete info;
     return NULL;
   }
 };
+
+ThreadPool::ThreadPool(int n) : SharedObject(), nthreads(n), poolid(0) {
+  scheduler = new Scheduler(n);
+  acquireShared(scheduler);
+}
+ThreadPool::~ThreadPool() {
+  releaseShared(scheduler);
+}
+ThreadState *ThreadPool::getThread(int i) { return scheduler->getThread(i); }
+void ThreadPool::shutdown(bool wait) { scheduler->shutdown(wait); }
+void ThreadPool::addThread(ThreadState *thread) {
+  scheduler->addThread(thread);
+}
+void ThreadPool::attachJob(Job *job) {
+  scheduler->attachJob(this, job);
+}
+void ThreadPool::detachJob(Job *job) {
+  scheduler->detachJob(job);
+}
+void ThreadPool::queueJob(Job *job) {
+  scheduler->queueJob(job);
+}
+void ThreadPool::broadcastJob(Job *job) {
+  scheduler->broadcastJob(job);
+}
+void ThreadPool::cancelDeps(Job * job) {
+  scheduler->cancelDeps(job);
+}
+void ThreadPool::cancelJob(Job *job) {
+  scheduler->cancelJob(job);
+}
+void ThreadPool::waitJob(Job *job) {
+  scheduler->waitJob(job);
+}
+void ThreadPool::clearThreadState() {
+  scheduler->clearThreadState();
+}
 
 void Job::addDep(vector<Job *> &jobs) {
   deps.insert(deps.end(), jobs.begin(), jobs.end());
@@ -1880,23 +1942,23 @@ void Job::addDep(long ndeps, Job **jobs) {
 void Job::addNotify(vector<Job *> &jobs) {
   notify.insert(notify.end(), jobs.begin(), jobs.end());
   if (done) {
-    ThreadPool::notifyDeps(pool, this);
+    Scheduler::notifyDeps(pool->scheduler, this);
   }
 }
 
 void Job::addNotify(Job *job) {
   notify.push_back(job);
   if (done) {
-    ThreadPool::notifyDeps(pool, this);
+    Scheduler::notifyDeps(pool->scheduler, this);
   }
 }
 
 void Job::run() {
   if (!cancelled) {
     running = true;
-    pool->lock.unlock();
+    pool->scheduler->lock.unlock();
     execute();
-    pool->lock.lock();
+    pool->scheduler->lock.lock();
     running = false;
   }
   done = true;
@@ -2010,7 +2072,7 @@ public:
   }
   virtual void activate(leftv arg) {
     if (!ready()) {
-      pool->lock.unlock();
+      pool->scheduler->lock.unlock();
       vector<leftv> argv;
       for (int i = 0; i < args.size(); i++) {
         appendArg(argv, args[i]);
@@ -2031,7 +2093,7 @@ public:
 	}
         val.CleanUp();
       }
-      pool->lock.lock();
+      pool->scheduler->lock.lock();
     }
   }
   virtual void execute() {
@@ -2056,12 +2118,12 @@ static BOOLEAN createThreadPool(leftv result, leftv arg) {
     pool->set_type(type_threadpool);
     for (int i = 0; i <n; i++) {
       const char *error;
-      PoolInfo *info = new PoolInfo();
-      info->pool = pool;
-      acquireShared(pool);
+      SchedInfo *info = new SchedInfo();
+      info->scheduler = pool->scheduler;
+      acquireShared(pool->scheduler);
       info->job = NULL;
       info->num = i;
-      ThreadState *thread = newThread(ThreadPool::main, info, &error);
+      ThreadState *thread = newThread(Scheduler::main, info, &error);
       if (!thread) {
         // TODO: clean up bad pool
         return cmd.abort(error);
@@ -2078,12 +2140,12 @@ ThreadPool *createThreadPool(int nthreads, int prioThreads = 0) {
   pool->set_type(type_threadpool);
   for (int i = 0; i <nthreads; i++) {
     const char *error;
-    PoolInfo *info = new PoolInfo();
-    info->pool = pool;
+    SchedInfo *info = new SchedInfo();
+    info->scheduler = pool->scheduler;
     acquireShared(pool);
     info->job = NULL;
     info->num = i;
-    ThreadState *thread = newThread(ThreadPool::main, info, &error);
+    ThreadState *thread = newThread(Scheduler::main, info, &error);
     if (!thread) {
       return NULL;
     }
@@ -2288,7 +2350,7 @@ Job *startJob(ThreadPool *pool, Job *job) {
 
 Job *scheduleJob(ThreadPool *pool, Job *job, long ndeps, Job **deps) {
   if (job->pool) return NULL;
-  pool->lock.lock();
+  pool->scheduler->lock.lock();
   bool cancelled = false;
   job->addDep(ndeps, deps);
   for (long i = 0; i < ndeps; i++) {
@@ -2301,7 +2363,7 @@ Job *scheduleJob(ThreadPool *pool, Job *job, long ndeps, Job **deps) {
   }
   else
     pool->attachJob(job);
-  pool->lock.unlock();
+  pool->scheduler->lock.unlock();
 }
 
 void cancelJob(Job *job) {
@@ -2420,18 +2482,18 @@ static BOOLEAN jobCancelled(leftv result, leftv arg) {
     if (!pool) {
       return cmd.abort("job has not yet been started or scheduled");
     }
-    pool->lock.lock();
+    pool->scheduler->lock.lock();
     cmd.set_result((long) job->cancelled);
-    pool->lock.unlock();
+    pool->scheduler->lock.unlock();
   }
   return cmd.status();
 }
 
 bool getJobCancelled(Job *job) {
   ThreadPool *pool = job->pool;
-  if (pool) pool->lock.lock();
+  if (pool) pool->scheduler->lock.lock();
   bool result = job->cancelled;
-  if (pool) pool->lock.unlock();
+  if (pool) pool->scheduler->lock.unlock();
   return result;
 }
 
@@ -2441,35 +2503,35 @@ bool getJobCancelled() {
 
 void setJobData(Job *job, void *data) {
   ThreadPool *pool = job->pool;
-  if (pool) pool->lock.lock();
+  if (pool) pool->scheduler->lock.lock();
   job->data = data;
-  if (pool) pool->lock.unlock();
+  if (pool) pool->scheduler->lock.unlock();
 }
 
 
 void *getJobData(Job *job) {
   ThreadPool *pool = job->pool;
-  if (pool) pool->lock.lock();
+  if (pool) pool->scheduler->lock.lock();
   void *result = job->data;
-  if (pool) pool->lock.unlock();
+  if (pool) pool->scheduler->lock.unlock();
   return result;
 }
 
 void addJobArgs(Job *job, leftv arg) {
   ThreadPool *pool = job->pool;
-  if (pool) pool->lock.lock();
+  if (pool) pool->scheduler->lock.lock();
   while (arg) {
     job->args.push_back(LinTree::to_string(arg));
     arg = arg->next;
   }
-  if (pool) pool->lock.unlock();
+  if (pool) pool->scheduler->lock.unlock();
 }
 
 leftv getJobResult(Job *job) {
   ThreadPool *pool = job->pool;
-  if (pool) pool->lock.lock();
+  if (pool) pool->scheduler->lock.lock();
   leftv result = LinTree::from_string(job->result);
-  if (pool) pool->lock.unlock();
+  if (pool) pool->scheduler->lock.unlock();
   return result;
 }
 
@@ -2532,17 +2594,17 @@ static BOOLEAN updateTrigger(leftv result, leftv arg) {
   cmd.check_init(0, "trigger not initialized");
   if (cmd.ok()) {
     Trigger *trigger = cmd.shared_arg<Trigger>(0);
-    trigger->pool->lock.lock();
+    trigger->pool->scheduler->lock.lock();
     if (!trigger->accept(arg->next))
       cmd.report("incompatible argument type(s) for this trigger");
     else {
       trigger->activate(arg->next);
       if (trigger->ready()) {
         trigger->run();
-	ThreadPool::notifyDeps(trigger->pool, trigger);
+	Scheduler::notifyDeps(trigger->pool->scheduler, trigger);
       }
     }
-    trigger->pool->lock.unlock();
+    trigger->pool->scheduler->lock.unlock();
   }
   return cmd.status();
 }
@@ -2561,9 +2623,9 @@ static BOOLEAN chainTrigger(leftv result, leftv arg) {
     if (trigger->pool != job->pool)
       return cmd.abort("arguments use different threadpools");
     ThreadPool *pool = trigger->pool;
-    pool->lock.lock();
+    pool->scheduler->lock.lock();
     job->triggers.push_back(trigger);
-    pool->lock.unlock();
+    pool->scheduler->lock.unlock();
   }
   return cmd.status();
 }
@@ -2576,9 +2638,9 @@ static BOOLEAN testTrigger(leftv result, leftv arg) {
   if (cmd.ok()) {
     Trigger *trigger = cmd.shared_arg<Trigger>(0);
     ThreadPool *pool = trigger->pool;
-    pool->lock.lock();
+    pool->scheduler->lock.lock();
     cmd.set_result((long)trigger->ready());
-    pool->lock.unlock();
+    pool->scheduler->lock.unlock();
   }
   return cmd.status();
 }
@@ -2665,7 +2727,7 @@ static BOOLEAN scheduleJob(leftv result, leftv arg) {
       return cmd.abort("dependency has been scheduled on a different threadpool");
     }
   }
-  pool->lock.lock();
+  pool->scheduler->lock.lock();
   bool cancelled = false;
   for (int i = 0; i < jobs.size(); i++) {
     jobs[i]->addDep(deps);
@@ -2682,7 +2744,7 @@ static BOOLEAN scheduleJob(leftv result, leftv arg) {
     else
       pool->attachJob(jobs[i]);
   }
-  pool->lock.unlock();
+  pool->scheduler->lock.unlock();
   if (jobs.size() > 0)
     cmd.set_result(type_job, new_shared(jobs[0]));
   return cmd.status();
